@@ -10,6 +10,7 @@ A clean, simple command-line interface for interacting with Model Context Protoc
 - 🔧 **Execute Tools** - Call MCP tools directly from the command line
 - 📖 **Read Resources** - Access resource data with formatted output
 - 🎯 **Clean Output** - Server logs suppressed by default for clean, parseable output
+- 📝 **Flexible Formatting** - Output results in JSON or Markdown format
 - ⚙️ **Config-Based** - Use standard MCP configuration format (compatible with Claude Desktop)
 
 ## Quick Start
@@ -69,10 +70,13 @@ mcpsh tool-info postgres query
 # 5. Call a tool
 mcpsh call postgres list_tables
 
-# 6. Call a tool with arguments
+# 6. Call a tool with arguments (output in Markdown format by default)
 mcpsh call postgres query --args '{"sql": "SELECT * FROM users LIMIT 5"}'
 
-# 7. Verbose mode - show server logs (for debugging)
+# 7. Get results in JSON format
+mcpsh call postgres query --args '{"sql": "SELECT * FROM users LIMIT 5"}' --format json
+
+# 8. Verbose mode - show server logs (for debugging)
 mcpsh tools postgres --verbose
 ```
 
@@ -190,7 +194,7 @@ mcpsh tool-info postgres query
 ### Call a Tool
 
 ```bash
-mcpsh call <server-name> <tool-name> [--args JSON] [--config PATH] [--verbose]
+mcpsh call <server-name> <tool-name> [--args JSON] [--format FORMAT] [--config PATH] [--verbose]
 ```
 
 Executes a tool on an MCP server. Output is clean by default (server logs suppressed).
@@ -198,6 +202,7 @@ Executes a tool on an MCP server. Output is clean by default (server logs suppre
 **Options:**
 - `--args`, `-a` - Tool arguments as JSON string
 - `--config`, `-c` - Path to MCP configuration file
+- `--format`, `-f` - Output format: `markdown` (default) or `json`
 - `--verbose`, `-v` - Show detailed server logs (suppressed by default)
 
 **Examples:**
@@ -216,10 +221,24 @@ mcpsh call shippo-new-relic-mcp run_nrql_query --args '{
   }
 }'
 
-# Output (clean by default):
+# Output in Markdown format (default - more readable):
 # ✓ Tool executed successfully
 # 
-# {"results":[{"count":4246161}],"query_id":null,"completed":true,...}
+# results:
+#   • Item 1: count: 4246161
+# query_id: null
+# completed: true
+# ...
+
+# Output in JSON format (use --format json):
+mcpsh call shippo-new-relic-mcp run_nrql_query --args '{
+  "query_input": {
+    "nrql": "SELECT count(*) FROM Transaction SINCE 1 hour ago"
+  }
+}' --format json
+
+# Or use shorthand:
+mcpsh call postgres query --args '{"sql": "SELECT * FROM users"}' -f json
 
 # Show server logs for debugging
 mcpsh call postgres query --args '{"sql": "SELECT * FROM users"}' --verbose

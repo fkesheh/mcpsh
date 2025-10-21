@@ -7,10 +7,11 @@ import os
 import sys
 import warnings
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, List, Union
 
 import typer
 from rich.console import Console
+from rich.markdown import Markdown
 
 from fastmcp import Client
 
@@ -63,6 +64,55 @@ def restore_logs(original_stderr_fd, devnull_fd):
         os.close(original_stderr_fd)
     if devnull_fd:
         os.close(devnull_fd)
+
+
+def json_to_markdown(data: Union[Dict, List, str, int, float, bool, None], level: int = 0) -> str:
+    """Convert JSON data to Markdown format."""
+    indent = "  " * level
+    
+    if data is None:
+        return f"{indent}*null*"
+    
+    if isinstance(data, bool):
+        return f"{indent}**{str(data).lower()}**"
+    
+    if isinstance(data, (int, float)):
+        return f"{indent}**{data}**"
+    
+    if isinstance(data, str):
+        return f"{indent}{data}"
+    
+    if isinstance(data, list):
+        if not data:
+            return f"{indent}*empty list*"
+        
+        md_lines = []
+        for i, item in enumerate(data):
+            if isinstance(item, dict):
+                md_lines.append(f"{indent}- Item {i + 1}:")
+                md_lines.append(json_to_markdown(item, level + 1))
+            else:
+                md_lines.append(f"{indent}- {json_to_markdown(item, 0).strip()}")
+        return "\n".join(md_lines)
+    
+    if isinstance(data, dict):
+        if not data:
+            return f"{indent}*empty object*"
+        
+        md_lines = []
+        for key, value in data.items():
+            if isinstance(value, dict):
+                md_lines.append(f"{indent}**{key}:**")
+                md_lines.append(json_to_markdown(value, level + 1))
+            elif isinstance(value, list):
+                md_lines.append(f"{indent}**{key}:**")
+                md_lines.append(json_to_markdown(value, level + 1))
+            else:
+                formatted_value = json_to_markdown(value, 0).strip()
+                md_lines.append(f"{indent}**{key}:** {formatted_value}")
+        return "\n".join(md_lines)
+    
+    return f"{indent}{str(data)}"
 
 
 @app.command()
@@ -399,6 +449,12 @@ def call(
         "-c",
         help="Path to MCP configuration file"
     ),
+    format_type: str = typer.Option(
+        "markdown",
+        "--format",
+        "-f",
+        help="Output format: markdown (default) or json"
+    ),
     verbose: bool = typer.Option(
         False,
         "--verbose",
@@ -424,6 +480,10 @@ def call(
             "query": "SELECT count(*) FROM table"
           }
         }'
+        
+        # Output in JSON format (markdown is default)
+        mcpsh call my-server my-tool --args '{"param": "value"}' --format json
+        mcpsh call my-server my-tool --args '{"param": "value"}' -f json
         
         # Tool with custom config
         mcpsh call my-server my-tool --args '{"param": "value"}' --config ./config.json
@@ -474,7 +534,24 @@ def call(
                     if result.content:
                         for i, content in enumerate(result.content):
                             if hasattr(content, 'text'):
-                                console.print(content.text)
+                                text_content = content.text
+                                
+                                # Check format type
+                                if format_type.lower() == "json":
+                                    # Explicit JSON format - print as-is
+                                    console.print(text_content)
+                                else:
+                                    # Default markdown format
+                                    try:
+                                        # Try to parse as JSON
+                                        json_data = json.loads(text_content)
+                                        # Convert to markdown
+                                        md_output = json_to_markdown(json_data)
+                                        # Render the markdown
+                                        console.print(Markdown(md_output))
+                                    except json.JSONDecodeError:
+                                        # If not JSON, just print as-is
+                                        console.print(text_content)
                 
         except Exception as e:
             if not verbose:
