@@ -2,6 +2,8 @@
 
 A clean, simple command-line interface for interacting with Model Context Protocol (MCP) servers using FastMCP.
 
+**Transform any MCP server into a CLI tool** - perfect for AI agents, automation scripts, and manual operations. Get the rich ecosystem of MCP tools with the simplicity and universality of the command line.
+
 ## Features
 
 - 🚀 **Simple & Fast** - Built with FastMCP for reliable MCP communication
@@ -13,6 +15,79 @@ A clean, simple command-line interface for interacting with Model Context Protoc
 - 🎯 **Clean Output** - Server logs suppressed by default for clean, parseable output
 - 📝 **Flexible Formatting** - Output results in JSON or Markdown format
 - ⚙️ **Config-Based** - Use standard MCP configuration format (compatible with Claude Desktop)
+
+## Why CLI for MCP?
+
+### 🤖 **Perfect for AI Agent Automation**
+
+While MCP (Model Context Protocol) is powerful, exposing MCP servers through CLI offers critical advantages for AI/LLM agents:
+
+**Reduced Context Overhead**
+- MCP requires embedding **every tool's schema** into the LLM's context window
+- As you add more MCP tools, the context bloats and model performance degrades
+- CLI invocation is lean - just command names and simple arguments
+- **Result**: Your AI agent can access more tools without hitting context limits
+
+**Universal LLM Support**  
+- **Any LLM that can execute shell commands** can use these tools
+- Works with Claude, GPT-4, local models, Cursor, Aider, and custom agents
+- No need for MCP-specific integration or protocol support
+- **Result**: Use the same tools across all your AI coding assistants
+
+**Simpler, More Reliable Function Calling**
+- LLMs generate CLI commands more reliably than complex protocol calls
+- Familiar bash syntax reduces hallucination and errors
+- Standard input/output makes debugging trivial
+- **Result**: Higher success rates and fewer agent failures
+
+**Use in Claude Skills & skill-mcp**
+
+Claude Skills allow you to upload code that Claude can execute. However, **[skill-mcp](https://github.com/fkesheh/skill-mcp)** provides a superior approach using MCP:
+
+- ✅ **Not locked to Claude** - Skills work in Claude, Cursor, and any MCP client
+- ✅ **No manual uploads** - Manage skills programmatically via MCP
+- ✅ **Better tool access** - Use `mcpsh` in your skills to access databases, APIs, monitoring tools, etc.
+- ✅ **Universal & future-proof** - MCP protocol vs proprietary Claude feature
+
+**Example skill using mcpsh:**
+
+```python
+# In a skill-mcp skill script
+import subprocess
+import json
+
+# Query database using mcpsh
+result = subprocess.run([
+    "mcpsh", "call", "postgres", "query",
+    "--args", '{"sql": "SELECT * FROM users WHERE active = true"}',
+    "-f", "json"
+], capture_output=True, text=True)
+
+data = json.loads(result.stdout.split('\n')[-2])  # Skip success message
+# Process data...
+```
+
+**More AI Agent Examples:**
+
+```bash
+# AI coding assistant queries your database
+mcpsh call postgres query --args '{"sql": "SELECT * FROM users WHERE active = true"}'
+
+# AI ops agent checks production metrics  
+mcpsh call new-relic run_nrql_query --args '{"query_input": {"nrql": "SELECT count(*) FROM Transaction WHERE appName = 'api' SINCE 1 hour ago"}}'
+
+# AI assistant manages your infrastructure
+mcpsh call databricks list_clusters
+mcpsh call skill-mcp run_skill_script --args '{"skill_name": "deploy", "script_path": "deploy.py"}'
+```
+
+### 🌉 **Bridge Between Worlds**
+
+Get the **best of both**:
+- Access the rich ecosystem of MCP servers (databases, APIs, monitoring, etc.)
+- Use them with the simplicity and universality of CLI tools  
+- Perfect for [skill-mcp](https://github.com/fkesheh/skill-mcp) skills - combine MCP tool access with skill execution
+- No need to choose - MCP servers become CLI tools!
 
 ## Quick Start
 
@@ -332,7 +407,16 @@ mcpsh call postgres query --args '{
 }'
 ```
 
-### Skill Management
+### Skill Management with skill-mcp
+
+[skill-mcp](https://github.com/fkesheh/skill-mcp) is an MCP server that lets you create, manage, and execute skills programmatically. It's superior to Claude Skills because it:
+
+- ✅ Works in Claude, Cursor, and any MCP client (not locked to Claude)
+- ✅ No manual file uploads - manage skills via MCP protocol
+- ✅ Skills can use `mcpsh` to access any MCP server (databases, APIs, etc.)
+- ✅ Local-first, future-proof, and open standard
+
+**Managing Skills:**
 
 ```bash
 # List available skills
@@ -351,6 +435,52 @@ mcpsh call skill-mcp run_skill_script --args '{
   "args": ["--input", "data/input.csv", "--output", "data/output.json"]
 }'
 ```
+
+**Using mcpsh Inside Skills:**
+
+Skills can use `mcpsh` to access any MCP server, giving them superpowers:
+
+```python
+# Example: skill that queries database and sends alerts
+# ~/.skill-mcp/skills/db-monitor/scripts/check_health.py
+
+import subprocess
+import json
+
+def run_mcpsh(server, tool, args):
+    """Helper to run mcpsh and parse JSON output"""
+    result = subprocess.run([
+        "mcpsh", "call", server, tool,
+        "--args", json.dumps(args),
+        "-f", "json"
+    ], capture_output=True, text=True)
+    
+    # Skip success message, get JSON
+    output = result.stdout.strip().split('\n')[-1]
+    return json.loads(output)
+
+# Query database
+users = run_mcpsh("postgres", "query", {
+    "sql": "SELECT COUNT(*) as count FROM users WHERE last_login < NOW() - INTERVAL '30 days'"
+})
+
+# Check metrics
+metrics = run_mcpsh("new-relic", "run_nrql_query", {
+    "query_input": {
+        "nrql": "SELECT average(duration) FROM Transaction SINCE 1 hour ago"
+    }
+})
+
+# Send alert if needed
+if users['count'] > 100:
+    print(f"Alert: {users['count']} inactive users found")
+```
+
+This approach gives your skills access to:
+- Databases (PostgreSQL, MySQL, etc.)
+- Monitoring tools (New Relic, Datadog, etc.)
+- Cloud platforms (Databricks, AWS, etc.)
+- Any MCP server in your config!
 
 ### API Exploration
 
@@ -611,7 +741,7 @@ mcpsh tools --help
 
 ## Requirements
 
-- Python 3.13+
+- Python 3.10+
 - FastMCP 2.12.5+
 - Typer 0.20.0+
 - Rich 14.2.0+
