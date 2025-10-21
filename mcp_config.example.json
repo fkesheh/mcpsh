@@ -1,0 +1,23 @@
+{
+  "mcpServers": {
+    "example-local": {
+      "command": "python",
+      "args": ["path/to/your/server.py"],
+      "env": {
+        "API_KEY": "your-api-key-here"
+      }
+    },
+    "example-remote": {
+      "url": "https://example.com/mcp",
+      "transport": "http",
+      "headers": {
+        "Authorization": "Bearer your-token-here"
+      }
+    },
+    "example-uvx": {
+      "command": "uvx",
+      "args": ["--from", "some-mcp-package", "mcp-server-command"]
+    }
+  }
+}
+
