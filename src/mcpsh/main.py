@@ -4,18 +4,26 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 import warnings
 from pathlib import Path
 from typing import Optional, Dict, List, Union
 
+# Disable Rich tracebacks by default before importing typer
+os.environ.setdefault('_TYPER_STANDARD_TRACEBACK', '1')
+
 import typer
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.traceback import install as install_rich_traceback
 
 from fastmcp import Client
 
 from mcpsh.config import load_config, list_configured_servers
+
+# Global flag to track if we should show tracebacks
+_show_tracebacks = False
 
 app = typer.Typer(
     help="""mcpsh - MCP Shell: Interact with Model Context Protocol servers
@@ -32,9 +40,45 @@ Common Examples:
     mcpsh read my-server "resource://path/to/resource"
     
 Use --help on any command for detailed examples.
-"""
+""",
+    pretty_exceptions_show_locals=False  # Disable showing local variables in tracebacks (security!)
 )
+
+# Custom exception hook that suppresses tracebacks by default (unless --verbose is used)
+# This is a security measure to prevent API keys and secrets from being displayed
+_original_excepthook = sys.excepthook
+
+def secure_excepthook(exc_type, exc_value, exc_traceback):
+    """
+    Custom exception hook that only shows tracebacks in verbose mode.
+    
+    This is a security measure to prevent API keys and secrets in local
+    variables from being displayed. All exceptions are properly caught and
+    sanitized in the command functions.
+    """
+    # For typer.Exit, just exit silently
+    if exc_type.__name__ == 'Exit':
+        sys.exit(exc_value.exit_code if hasattr(exc_value, 'exit_code') else 1)
+    
+    # If verbose mode, show traceback
+    if _show_tracebacks:
+        _original_excepthook(exc_type, exc_value, exc_traceback)
+    else:
+        # Don't show anything (we already printed the error in our handlers)
+        # Just exit with code 1
+        sys.exit(1)
+
+sys.excepthook = secure_excepthook
+
 console = Console()
+
+
+def enable_verbose_tracebacks():
+    """Enable Rich tracebacks for verbose mode (but still hide locals for security)."""
+    global _show_tracebacks
+    _show_tracebacks = True
+    # Install Rich traceback handler, but never show locals (security!)
+    install_rich_traceback(show_locals=False, suppress=[typer])
 
 
 def suppress_logs():
@@ -60,10 +104,18 @@ def suppress_logs():
 def restore_logs(original_stderr_fd, devnull_fd):
     """Restore logging output and warnings."""
     if original_stderr_fd:
-        os.dup2(original_stderr_fd, 2)
-        os.close(original_stderr_fd)
+        try:
+            os.dup2(original_stderr_fd, 2)
+            os.close(original_stderr_fd)
+        except OSError:
+            # File descriptor already closed, ignore
+            pass
     if devnull_fd:
-        os.close(devnull_fd)
+        try:
+            os.close(devnull_fd)
+        except OSError:
+            # File descriptor already closed, ignore
+            pass
 
 
 def json_to_markdown(data: Union[Dict, List, str, int, float, bool, None], level: int = 0) -> str:
@@ -115,6 +167,43 @@ def json_to_markdown(data: Union[Dict, List, str, int, float, bool, None], level
     return f"{indent}{str(data)}"
 
 
+def sanitize_error_message(error: Exception) -> str:
+    """Sanitize error messages to prevent leaking secrets.
+    
+    This removes sensitive information like environment variables, API keys,
+    and command arguments from error messages before displaying them.
+    """
+    error_str = str(error)
+    
+    # Pattern to match common secret patterns in error messages
+    # This includes env vars, tokens, keys, passwords, etc.
+    patterns = [
+        # Environment variable assignments (KEY=value)
+        (r'(\w+)=([^\s,\}\]]+)', r'\1=***'),
+        # JSON objects with common secret keys
+        (r'"(api[_-]?key|token|password|secret|auth|credential|bearer)["\s]*:[^,\}]+', r'"\1": "***"'),
+        # Single-quoted values that look like secrets (long alphanumeric strings)
+        (r"'([a-zA-Z0-9_-]{20,})'", r"'***'"),
+        # Double-quoted values that look like secrets
+        (r'"([a-zA-Z0-9_-]{20,})"', r'"***"'),
+        # Bearer tokens
+        (r'Bearer\s+[a-zA-Z0-9_-]+', r'Bearer ***'),
+        # Basic auth
+        (r'Basic\s+[a-zA-Z0-9+/=]+', r'Basic ***'),
+    ]
+    
+    sanitized = error_str
+    for pattern, replacement in patterns:
+        sanitized = re.sub(pattern, replacement, sanitized, flags=re.IGNORECASE)
+    
+    # Also remove any mention of 'env' dictionaries entirely
+    # This is more aggressive but safer
+    sanitized = re.sub(r"'env':\s*\{[^}]*\}", "'env': {***}", sanitized)
+    sanitized = re.sub(r'"env":\s*\{[^}]*\}', '"env": {***}', sanitized)
+    
+    return sanitized
+
+
 @app.command()
 def servers(
     config: Optional[Path] = typer.Option(
@@ -127,7 +216,7 @@ def servers(
         False,
         "--verbose",
         "-v",
-        help="Show detailed server logs"
+        help="Show detailed server logs and tracebacks"
     )
 ):
     """
@@ -138,6 +227,10 @@ def servers(
         mcpsh servers --config ~/my-config.json
         mcpsh servers --verbose
     """
+    # Enable tracebacks in verbose mode
+    if verbose:
+        enable_verbose_tracebacks()
+    
     # Suppress server logs by default
     stderr_fd, devnull_fd = (None, None)
     if not verbose:
@@ -155,7 +248,7 @@ def servers(
     except Exception as e:
         if not verbose:
             restore_logs(stderr_fd, devnull_fd)
-        console.print(f"[red]Error: {e}[/red]")
+        console.print(f"[red]Error: {sanitize_error_message(e)}[/red]")
         raise typer.Exit(1)
     finally:
         if not verbose:
@@ -181,7 +274,7 @@ def tools(
         False,
         "--verbose",
         "-v",
-        help="Show detailed server logs"
+        help="Show detailed server logs and tracebacks"
     )
 ):
     """
@@ -192,6 +285,10 @@ def tools(
         mcpsh tools my-server --detailed
         mcpsh tools my-server --verbose
     """
+    # Enable tracebacks in verbose mode
+    if verbose:
+        enable_verbose_tracebacks()
+    
     # Suppress server logs by default
     stderr_fd, devnull_fd = (None, None)
     if not verbose:
@@ -250,7 +347,7 @@ def tools(
         except Exception as e:
             if not verbose:
                 restore_logs(stderr_fd, devnull_fd)
-            console.print(f"[red]Error: {e}[/red]")
+            console.print(f"[red]Error: {sanitize_error_message(e)}[/red]")
             raise typer.Exit(1)
     
     try:
@@ -274,7 +371,7 @@ def tool_info(
         False,
         "--verbose",
         "-v",
-        help="Show detailed server logs"
+        help="Show detailed server logs and tracebacks"
     )
 ):
     """
@@ -288,6 +385,10 @@ def tool_info(
         mcpsh tool-info my-server query
         mcpsh tool-info my-server run-script
     """
+    # Enable tracebacks in verbose mode
+    if verbose:
+        enable_verbose_tracebacks()
+    
     # Suppress server logs by default
     stderr_fd, devnull_fd = (None, None)
     if not verbose:
@@ -423,7 +524,7 @@ def tool_info(
         except Exception as e:
             if not verbose:
                 restore_logs(stderr_fd, devnull_fd)
-            console.print(f"[red]Error: {e}[/red]")
+            console.print(f"[red]Error: {sanitize_error_message(e)}[/red]")
             raise typer.Exit(1)
     
     try:
@@ -459,7 +560,7 @@ def call(
         False,
         "--verbose",
         "-v",
-        help="Show detailed server logs"
+        help="Show detailed server logs and tracebacks"
     )
 ):
     """
@@ -488,6 +589,10 @@ def call(
         # Tool with custom config
         mcpsh call my-server my-tool --args '{"param": "value"}' --config ./config.json
     """
+    # Enable tracebacks in verbose mode
+    if verbose:
+        enable_verbose_tracebacks()
+    
     # Suppress server logs by default
     stderr_fd, devnull_fd = (None, None)
     if not verbose:
@@ -556,7 +661,7 @@ def call(
         except Exception as e:
             if not verbose:
                 restore_logs(stderr_fd, devnull_fd)
-            console.print(f"[red]Error: {e}[/red]")
+            console.print(f"[red]Error: {sanitize_error_message(e)}[/red]")
             raise typer.Exit(1)
     
     try:
@@ -616,7 +721,7 @@ def resources(
                 console.print(f"[dim]Total: {len(resources_list)} resources[/dim]")
                 
         except Exception as e:
-            console.print(f"[red]Error: {e}[/red]")
+            console.print(f"[red]Error: {sanitize_error_message(e)}[/red]")
             raise typer.Exit(1)
     
     asyncio.run(_list_resources())
@@ -669,7 +774,7 @@ def read(
                             console.print(f"[dim]Binary data: {len(content.blob)} bytes[/dim]")
                 
         except Exception as e:
-            console.print(f"[red]Error: {e}[/red]")
+            console.print(f"[red]Error: {sanitize_error_message(e)}[/red]")
             raise typer.Exit(1)
     
     asyncio.run(_read_resource())
@@ -731,7 +836,7 @@ def info(
                     console.print(f"  Prompts: {len(prompts_list)}")
                 
         except Exception as e:
-            console.print(f"[red]Error: {e}[/red]")
+            console.print(f"[red]Error: {sanitize_error_message(e)}[/red]")
             raise typer.Exit(1)
     
     asyncio.run(_show_info())
@@ -787,7 +892,7 @@ def prompts(
                 console.print(f"[dim]Total: {len(prompts_list)} prompts[/dim]")
                 
         except Exception as e:
-            console.print(f"[red]Error: {e}[/red]")
+            console.print(f"[red]Error: {sanitize_error_message(e)}[/red]")
             raise typer.Exit(1)
     
     asyncio.run(_list_prompts())
