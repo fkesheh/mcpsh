@@ -5,6 +5,7 @@ A clean, simple command-line interface for interacting with Model Context Protoc
 ## Features
 
 - 🚀 **Simple & Fast** - Built with FastMCP for reliable MCP communication
+- ⚡ **Zero Install** - Run with `uvx mcpsh` without installation
 - 📋 **List & Discover** - Explore tools, resources, and prompts from any MCP server
 - 🔍 **Schema Inspection** - View detailed tool schemas and parameter requirements
 - 🔧 **Execute Tools** - Call MCP tools directly from the command line
@@ -18,13 +19,19 @@ A clean, simple command-line interface for interacting with Model Context Protoc
 ### Installation
 
 ```bash
-# Install from source
-git clone <repository-url>
+# Option 1: Run directly with uvx (no installation required)
+uvx mcpsh servers
+uvx mcpsh call <server> <tool> --args '{...}'
+
+# Option 2: Install from PyPI
+pip install mcpsh
+# or using uv
+uv pip install mcpsh
+
+# Option 3: Install from source
+git clone https://github.com/fkesheh/mcpsh
 cd mcpsh
 uv pip install -e .
-
-# Or install from PyPI (once published)
-uv pip install mcpsh
 ```
 
 ### Setup Configuration
