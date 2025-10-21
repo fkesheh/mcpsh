@@ -121,9 +121,14 @@ mcpsh servers
 
 #### Option 2: Create Custom Configuration
 
-Create a `mcp_config.json` file in your current directory:
+Create a `~/.mcpsh/mcp_config.json` file in your home directory:
 
-```json
+```bash
+# Create the directory
+mkdir -p ~/.mcpsh
+
+# Create the config file
+cat > ~/.mcpsh/mcp_config.json << 'EOF'
 {
   "mcpServers": {
     "my-server": {
@@ -132,6 +137,7 @@ Create a `mcp_config.json` file in your current directory:
     }
   }
 }
+EOF
 ```
 
 ### Basic Workflow
@@ -166,10 +172,11 @@ mcpsh tools postgres --verbose
 
 ### Default Configuration Locations
 
-The CLI automatically looks for configuration in:
+The CLI automatically looks for configuration in this order:
 1. Path specified with `--config` flag
-2. `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
-3. `mcp_config.json` in the current directory
+2. `~/.mcpsh/mcp_config.json` (recommended default location)
+3. `~/Library/Application Support/Claude/claude_desktop_config.json` (Claude Desktop)
+4. `~/.cursor/mcp.json` (Cursor MCP config)
 
 ### Configuration Format
 

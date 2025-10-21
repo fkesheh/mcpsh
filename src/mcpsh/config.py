@@ -19,17 +19,27 @@ def load_config(config_path: Path | None = None) -> Dict[str, Any]:
         Dictionary containing the mcpServers configuration
     """
     if config_path is None:
-        # Try default Claude Desktop location
-        default_path = Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+        # Try ~/.mcpsh/mcp_config.json first (default)
+        default_path = Path.home() / ".mcpsh" / "mcp_config.json"
         if default_path.exists():
             config_path = default_path
         else:
-            # Try current directory
-            config_path = Path("mcp_config.json")
+            # Fallback to Claude Desktop location
+            claude_path = Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+            if claude_path.exists():
+                config_path = claude_path
+            else:
+                # Fallback to ~/.cursor/mcp.json
+                cursor_path = Path.home() / ".cursor" / "mcp.json"
+                if cursor_path.exists():
+                    config_path = cursor_path
+                else:
+                    # No config found, use default path for error message
+                    config_path = default_path
     
     if not config_path.exists():
         console.print(f"[red]Configuration file not found: {config_path}[/red]")
-        console.print("\n[yellow]Create a mcp_config.json file with your MCP servers configuration.[/yellow]")
+        console.print("\n[yellow]Create a ~/.mcpsh/mcp_config.json file with your MCP servers configuration.[/yellow]")
         console.print("\nExample configuration:")
         console.print(json.dumps({
             "mcpServers": {
