@@ -172,6 +172,7 @@ def sanitize_error_message(error: Exception) -> str:
     
     This removes sensitive information like environment variables, API keys,
     and command arguments from error messages before displaying them.
+    Also escapes Rich markup characters to prevent rendering issues.
     """
     error_str = str(error)
     
@@ -200,6 +201,10 @@ def sanitize_error_message(error: Exception) -> str:
     # This is more aggressive but safer
     sanitized = re.sub(r"'env':\s*\{[^}]*\}", "'env': {***}", sanitized)
     sanitized = re.sub(r'"env":\s*\{[^}]*\}', '"env": {***}', sanitized)
+    
+    # Escape Rich markup characters to prevent rendering errors
+    # Replace [ with \[ and ] with \] to prevent Rich from interpreting them as markup tags
+    sanitized = sanitized.replace('[', r'\[').replace(']', r'\]')
     
     return sanitized
 
@@ -643,8 +648,8 @@ def call(
                                 
                                 # Check format type
                                 if format_type.lower() == "json":
-                                    # Explicit JSON format - print as-is
-                                    console.print(text_content)
+                                    # Explicit JSON format - print as-is (disable markup to avoid bracket interpretation)
+                                    console.print(text_content, markup=False)
                                 else:
                                     # Default markdown format
                                     try:

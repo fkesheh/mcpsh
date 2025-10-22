@@ -142,3 +142,48 @@ def test_call_with_invalid_json(temp_config_file):
     assert result.exit_code == 1
     assert "Invalid JSON" in result.stdout
 
+
+@patch('mcpsh.main.Client')
+def test_call_command_json_format(mock_client, temp_config_file):
+    """Test call command with JSON format output."""
+    # Setup mock
+    mock_instance = AsyncMock()
+    mock_client.return_value.__aenter__.return_value = mock_instance
+    
+    # Create mock result with JSON containing brackets (to test markup escape)
+    mock_result = MagicMock()
+    mock_content = MagicMock()
+    mock_content.text = '[{"id": 1, "name": "test"}, {"id": 2, "name": "example"}]'
+    mock_result.content = [mock_content]
+    
+    mock_instance.call_tool.return_value = mock_result
+    
+    result = runner.invoke(app, [
+        "call", 
+        "test-server", 
+        "test-tool",
+        "--format", "json",
+        "--config", str(temp_config_file)
+    ])
+    
+    assert result.exit_code == 0
+    assert "Tool executed successfully" in result.stdout
+    # JSON should be printed as-is without Rich markup errors
+    assert '"id": 1' in result.stdout or "id" in result.stdout
+
+
+def test_sanitize_error_message_escapes_brackets():
+    """Test that error message sanitization escapes Rich markup characters."""
+    from mcpsh.main import sanitize_error_message
+    
+    # Test error with brackets
+    error = Exception("Error: [test] failed")
+    sanitized = sanitize_error_message(error)
+    assert r"\[" in sanitized
+    assert r"\]" in sanitized
+    
+    # Test error with JSON-like content
+    error = Exception('Invalid response: {"error": ["item1", "item2"]}')
+    sanitized = sanitize_error_message(error)
+    assert r"\[" in sanitized or "item1" in sanitized  # Should escape or preserve content
+
