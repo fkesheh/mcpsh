@@ -1,12 +1,13 @@
 """Tests for config loading and parsing."""
 
 import json
+import os
 import tempfile
 from pathlib import Path
 
 import pytest
 
-from mcpsh.config import load_config, list_configured_servers
+from mcpsh.config import load_config, list_configured_servers, get_config_path
 
 
 def test_load_config_from_file(temp_config_file):
@@ -75,15 +76,108 @@ def test_config_server_without_env():
             }
         }
     }
-    
+
     with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
         json.dump(config_data, f)
         temp_path = Path(f.name)
-    
+
     try:
         config = load_config(temp_path)
         assert "simple-server" in config
         assert "env" not in config["simple-server"]
     finally:
         temp_path.unlink(missing_ok=True)
+
+
+class TestGetConfigPath:
+    """Tests for get_config_path() function and priority chain."""
+
+    def test_explicit_config_path_has_highest_priority(self, temp_config_file):
+        """Test that --config flag (explicit path) has highest priority."""
+        # Set environment variable
+        os.environ["MCPSH_CONFIG"] = "/some/other/path.json"
+
+        try:
+            resolved_path, source = get_config_path(temp_config_file)
+
+            assert resolved_path == temp_config_file
+            assert source == "--config flag"
+        finally:
+            # Cleanup
+            os.environ.pop("MCPSH_CONFIG", None)
+
+    def test_env_var_has_second_priority(self, temp_config_file):
+        """Test that MCPSH_CONFIG env var has second priority (after explicit path)."""
+        os.environ["MCPSH_CONFIG"] = str(temp_config_file)
+
+        try:
+            resolved_path, source = get_config_path(None)
+
+            assert resolved_path == temp_config_file
+            assert source == "MCPSH_CONFIG environment variable"
+        finally:
+            # Cleanup
+            os.environ.pop("MCPSH_CONFIG", None)
+
+    def test_env_var_with_tilde_expansion(self):
+        """Test that MCPSH_CONFIG env var expands ~ to home directory."""
+        # Create a temp file in home directory for testing
+        home_dir = Path.home()
+        test_file = home_dir / ".test_mcpsh_config.json"
+
+        config_data = {"mcpServers": {"test": {"command": "python"}}}
+        with open(test_file, 'w') as f:
+            json.dump(config_data, f)
+
+        # Use tilde notation in env var
+        os.environ["MCPSH_CONFIG"] = "~/.test_mcpsh_config.json"
+
+        try:
+            resolved_path, source = get_config_path(None)
+
+            assert resolved_path == test_file
+            assert resolved_path.exists()
+            assert source == "MCPSH_CONFIG environment variable"
+        finally:
+            # Cleanup
+            os.environ.pop("MCPSH_CONFIG", None)
+            test_file.unlink(missing_ok=True)
+
+    def test_env_var_nonexistent_file_falls_back(self):
+        """Test that nonexistent MCPSH_CONFIG falls back to default locations."""
+        os.environ["MCPSH_CONFIG"] = "/nonexistent/config.json"
+
+        try:
+            resolved_path, source = get_config_path(None)
+
+            # Should fall back to default location
+            # (Not testing which specific fallback, just that it doesn't use the env var)
+            assert source != "MCPSH_CONFIG environment variable"
+        finally:
+            # Cleanup
+            os.environ.pop("MCPSH_CONFIG", None)
+
+    def test_default_location_priority_chain(self):
+        """Test the default location fallback chain."""
+        # Make sure no env var is set
+        os.environ.pop("MCPSH_CONFIG", None)
+
+        resolved_path, source = get_config_path(None)
+
+        # Should return one of the default locations
+        # The exact location depends on what exists on the system
+        assert source in [
+            "default location (~/.mcpsh/mcp_config.json)",
+            "Claude Desktop config",
+            "Cursor config",
+            "default location (not found)"
+        ]
+
+    def test_returns_tuple_with_path_and_source(self, temp_config_file):
+        """Test that get_config_path returns a tuple of (Path, str)."""
+        resolved_path, source = get_config_path(temp_config_file)
+
+        assert isinstance(resolved_path, Path)
+        assert isinstance(source, str)
+        assert len(source) > 0
 

@@ -1,6 +1,7 @@
 """Tests for main CLI commands."""
 
 import json
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -175,15 +176,105 @@ def test_call_command_json_format(mock_client, temp_config_file):
 def test_sanitize_error_message_escapes_brackets():
     """Test that error message sanitization escapes Rich markup characters."""
     from mcpsh.main import sanitize_error_message
-    
+
     # Test error with brackets
     error = Exception("Error: [test] failed")
     sanitized = sanitize_error_message(error)
     assert r"\[" in sanitized
     assert r"\]" in sanitized
-    
+
     # Test error with JSON-like content
     error = Exception('Invalid response: {"error": ["item1", "item2"]}')
     sanitized = sanitize_error_message(error)
     assert r"\[" in sanitized or "item1" in sanitized  # Should escape or preserve content
+
+
+class TestConfigPathCommand:
+    """Tests for the config-path command."""
+
+    def test_config_path_help(self):
+        """Test config-path command help."""
+        result = runner.invoke(app, ["config-path", "--help"])
+        assert result.exit_code == 0
+        assert "Show which configuration file" in result.stdout
+
+    def test_config_path_with_explicit_config(self, temp_config_file):
+        """Test config-path with --config flag."""
+        result = runner.invoke(app, ["config-path", "--config", str(temp_config_file)])
+        assert result.exit_code == 0
+        assert str(temp_config_file) in result.stdout
+        assert "--config flag" in result.stdout
+
+    def test_config_path_with_env_var(self, temp_config_file):
+        """Test config-path with MCPSH_CONFIG environment variable."""
+        os.environ["MCPSH_CONFIG"] = str(temp_config_file)
+
+        try:
+            result = runner.invoke(app, ["config-path"])
+            assert result.exit_code == 0
+            assert str(temp_config_file) in result.stdout
+            assert "MCPSH_CONFIG" in result.stdout
+        finally:
+            os.environ.pop("MCPSH_CONFIG", None)
+
+    def test_config_path_with_default_location(self):
+        """Test config-path with default location."""
+        # Ensure no env var is set
+        os.environ.pop("MCPSH_CONFIG", None)
+
+        result = runner.invoke(app, ["config-path"])
+
+        # Should return successfully and show a source
+        assert result.exit_code == 0
+        # Should show one of the default locations
+        assert any(loc in result.stdout for loc in [
+            "~/.mcpsh/mcp_config.json",
+            "Claude Desktop",
+            "Cursor",
+            "not found"
+        ])
+
+    def test_config_path_env_var_overrides_default(self, temp_config_file):
+        """Test that MCPSH_CONFIG env var takes precedence over default locations."""
+        os.environ["MCPSH_CONFIG"] = str(temp_config_file)
+
+        try:
+            result = runner.invoke(app, ["config-path"])
+
+            assert result.exit_code == 0
+            # Should show env var as source, not default
+            assert "MCPSH_CONFIG" in result.stdout
+            assert "default location" not in result.stdout
+        finally:
+            os.environ.pop("MCPSH_CONFIG", None)
+
+    def test_config_path_flag_overrides_env_var(self, temp_config_file):
+        """Test that --config flag takes precedence over MCPSH_CONFIG env var."""
+        # Create another temp config
+        import tempfile
+        other_config = {
+            "mcpServers": {
+                "other-server": {
+                    "command": "python"
+                }
+            }
+        }
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            json.dump(other_config, f)
+            other_path = Path(f.name)
+
+        try:
+            os.environ["MCPSH_CONFIG"] = str(temp_config_file)
+
+            result = runner.invoke(app, ["config-path", "--config", str(other_path)])
+
+            assert result.exit_code == 0
+            # Should use --config flag, not env var
+            assert str(other_path) in result.stdout
+            assert "--config flag" in result.stdout
+            assert "MCPSH_CONFIG" not in result.stdout or str(temp_config_file) not in result.stdout
+        finally:
+            os.environ.pop("MCPSH_CONFIG", None)
+            other_path.unlink(missing_ok=True)
 

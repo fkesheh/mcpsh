@@ -20,7 +20,7 @@ from rich.traceback import install as install_rich_traceback
 
 from fastmcp import Client
 
-from mcpsh.config import load_config, list_configured_servers
+from mcpsh.config import load_config, list_configured_servers, get_config_path
 
 # Global flag to track if we should show tracebacks
 _show_tracebacks = False
@@ -30,15 +30,20 @@ app = typer.Typer(
 
 Quick Start:
     mcpsh servers                          # List configured servers
+    mcpsh config-path                      # Show which config is being used
     mcpsh tools <server>                   # List available tools
     mcpsh tool-info <server> <tool>        # Get tool details
     mcpsh call <server> <tool> --args '{...}'  # Execute a tool
-    
+
+Configuration:
+    Set MCPSH_CONFIG environment variable to avoid using --config flag:
+    export MCPSH_CONFIG=~/.mcpsh/mcp_config.json
+
 Common Examples:
     mcpsh call my-server query --args '{"sql": "SELECT * FROM users"}'
     mcpsh call my-server my-tool --args '{"param": "value"}'
     mcpsh read my-server "resource://path/to/resource"
-    
+
 Use --help on any command for detailed examples.
 """,
     pretty_exceptions_show_locals=False  # Disable showing local variables in tracebacks (security!)
@@ -258,6 +263,46 @@ def servers(
     finally:
         if not verbose:
             restore_logs(stderr_fd, devnull_fd)
+
+
+@app.command(name="config-path")
+def config_path(
+    config: Optional[Path] = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Path to MCP configuration file"
+    )
+):
+    """
+    Show which configuration file is being used.
+
+    Displays the resolved path and source of the configuration file based on the priority chain:
+    1. --config flag (if provided)
+    2. MCPSH_CONFIG environment variable
+    3. ~/.mcpsh/mcp_config.json (default location)
+    4. Claude Desktop config
+    5. Cursor config
+
+    Examples:
+        mcpsh config-path
+        mcpsh config-path --config ~/my-config.json
+        MCPSH_CONFIG=~/my-config.json mcpsh config-path
+    """
+    try:
+        resolved_path, source = get_config_path(config)
+
+        console.print(f"[bold]Configuration file:[/bold] {resolved_path}")
+        console.print(f"[bold]Source:[/bold] {source}")
+
+        if resolved_path.exists():
+            console.print(f"[green]✓ File exists[/green]")
+        else:
+            console.print(f"[yellow]⚠ File not found[/yellow]")
+
+    except Exception as e:
+        console.print(f"[red]Error: {sanitize_error_message(e)}[/red]")
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -547,7 +592,7 @@ def call(
         None,
         "--args",
         "-a",
-        help="Tool arguments as JSON string"
+        help="Tool arguments as JSON string (use single quotes around JSON, double quotes inside)"
     ),
     config: Optional[Path] = typer.Option(
         None,
@@ -570,29 +615,31 @@ def call(
 ):
     """
     Call a tool on an MCP server.
-    
+
+    IMPORTANT: Arguments must be valid JSON with proper quoting:
+      ✓ Correct:   --args '{"key": "value"}'    (single quotes outside, double inside)
+      ✗ Wrong:     --args {"key": "value"}      (missing outer quotes)
+      ✗ Wrong:     --args "{'key': 'value'}"    (Python dict, not JSON)
+
     Use 'mcpsh tool-info <server> <tool>' to see parameter requirements first.
-    
+
     Examples:
         # Simple tool with no arguments
         mcpsh call my-server list-items
-        
-        # Tool with simple arguments
+
+        # Tool with simple arguments (note the quotes!)
         mcpsh call my-server query --args '{"sql": "SELECT * FROM users LIMIT 5"}'
-        
+
         # Tool with nested arguments
-        mcpsh call my-server run-query --args '{
-          "query_input": {
-            "query": "SELECT count(*) FROM table"
-          }
-        }'
-        
+        mcpsh call my-server run-query --args '{"query_input": {"query": "SELECT count(*) FROM table"}}'
+
         # Output in JSON format (markdown is default)
         mcpsh call my-server my-tool --args '{"param": "value"}' --format json
         mcpsh call my-server my-tool --args '{"param": "value"}' -f json
-        
-        # Tool with custom config
-        mcpsh call my-server my-tool --args '{"param": "value"}' --config ./config.json
+
+        # Using environment variable for config
+        export MCPSH_CONFIG=~/.mcpsh/mcp_config.json
+        mcpsh call my-server my-tool --args '{"param": "value"}'
     """
     # Enable tracebacks in verbose mode
     if verbose:

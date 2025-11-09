@@ -172,11 +172,25 @@ mcpsh tools postgres --verbose
 
 ### Default Configuration Locations
 
-The CLI automatically looks for configuration in this order:
+The CLI automatically looks for configuration in this priority order:
 1. Path specified with `--config` flag
-2. `~/.mcpsh/mcp_config.json` (recommended default location)
-3. `~/Library/Application Support/Claude/claude_desktop_config.json` (Claude Desktop)
-4. `~/.cursor/mcp.json` (Cursor MCP config)
+2. `MCPSH_CONFIG` environment variable
+3. `~/.mcpsh/mcp_config.json` (recommended default location)
+4. `~/Library/Application Support/Claude/claude_desktop_config.json` (Claude Desktop)
+5. `~/.cursor/mcp.json` (Cursor MCP config)
+
+**Pro Tip:** Set the `MCPSH_CONFIG` environment variable to avoid using `--config` flag on every command:
+
+```bash
+# Add to your ~/.bashrc, ~/.zshrc, or ~/.profile
+export MCPSH_CONFIG=~/.mcpsh/mcp_config.json
+
+# Or use Claude Desktop's config
+export MCPSH_CONFIG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
+
+# Check which config is being used
+mcpsh config-path
+```
 
 ### Configuration Format
 
@@ -220,6 +234,34 @@ Lists all configured MCP servers with their status.
 **Options:**
 - `--config`, `-c` - Path to MCP configuration file
 - `--verbose`, `-v` - Show detailed server logs (suppressed by default)
+
+### Show Configuration Path
+
+```bash
+mcpsh config-path [--config PATH]
+```
+
+Shows which configuration file is being used and its source.
+
+**Options:**
+- `--config`, `-c` - Path to MCP configuration file
+
+**Examples:**
+
+```bash
+# Check which config is being used
+mcpsh config-path
+
+# Output:
+# Configuration file: /Users/username/.mcpsh/mcp_config.json
+# Source: default location (~/.mcpsh/mcp_config.json)
+# ✓ File exists
+
+# With environment variable
+export MCPSH_CONFIG=~/.mcpsh/my_config.json
+mcpsh config-path
+# Output shows: Source: MCPSH_CONFIG environment variable
+```
 
 ### Show Server Info
 
@@ -691,8 +733,10 @@ mcpsh info <server-name>
 | Command | Description | Example |
 |---------|-------------|---------|
 | `servers` | List all configured servers | `mcpsh servers` |
+| `config-path` | Show which config file is being used | `mcpsh config-path` |
 | `info` | Show server details | `mcpsh info postgres` |
 | `tools` | List tools from a server | `mcpsh tools postgres` |
+| `tool-info` | Show detailed tool information | `mcpsh tool-info postgres query` |
 | `call` | Execute a tool | `mcpsh call postgres query --args '{"sql":"..."}` |
 | `resources` | List resources from a server | `mcpsh resources skill-mcp` |
 | `read` | Read a resource | `mcpsh read skill-mcp "skill://..."` |
