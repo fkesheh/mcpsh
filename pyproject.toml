@@ -1,6 +1,6 @@
 [project]
 name = "mcpsh"
-version = "0.1.3"
+version = "0.1.4"
 description = "A clean CLI for interacting with MCP servers using FastMCP"
 readme = "README.md"
 authors = [
