@@ -211,6 +211,57 @@ async def main():
 asyncio.run(main())
 ```
 
+### Stateful Workflows
+
+Some MCP servers maintain state across multiple tool calls. For example, loading configuration or data once and then querying it multiple times. To maintain state, keep a single long-lived async context:
+
+```python
+import asyncio
+from mcpsh.client import MCPClient
+
+async def stateful_example():
+    # Single context - state persists across all operations
+    async with MCPClient("api-explorer") as client:
+        # Step 1: Load data once (state stored in server)
+        await client.call_tool("load-openapi-spec", {
+            "file_path_or_url": "https://api.example.com/openapi.json"
+        })
+
+        # Step 2-N: Query the loaded data multiple times
+        # State persists within the same context
+        result1 = await client.call_tool("get-endpoint-details", {
+            "path": "/users",
+            "method": "GET"
+        })
+
+        result2 = await client.call_tool("get-endpoint-details", {
+            "path": "/users/{id}",
+            "method": "GET"
+        })
+
+        result3 = await client.call_tool("get-schema-details", {
+            "schema_name": "User"
+        })
+
+        # All operations share the same server subprocess and state
+
+asyncio.run(stateful_example())
+```
+
+**Why this works:**
+- The `async with` context keeps the MCP server subprocess alive
+- State (like loaded OpenAPI specs) persists for all operations within that context
+- No need to reload data or restart the server between calls
+- Perfect for workflows with setup/teardown or data loading
+
+**Common stateful scenarios:**
+- Loading OpenAPI specs and querying endpoints
+- Database connections with transaction management
+- Configuration loading and multi-step operations
+- Any workflow where initial setup is expensive
+
+See `example_stateful_with_config.py` for a complete working example.
+
 ## Configuration
 
 ### Default Configuration Locations
