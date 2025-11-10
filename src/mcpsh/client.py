@@ -120,15 +120,10 @@ class MCPClient:
         if arguments is None:
             arguments = {}
 
-        # Construct tool name with server prefix if needed
-        full_tool_name = f"{self.server_name}_{tool_name}" if "_" not in tool_name else tool_name
-
+        # Note: We create single-server configs in __init__ (line 57),
+        # so FastMCP doesn't add prefixes. Call tools by their direct name.
         async def _call():
-            try:
-                result = await self._client.call_tool(full_tool_name, arguments)
-            except Exception:
-                # Try without prefix
-                result = await self._client.call_tool(tool_name, arguments)
+            result = await self._client.call_tool(tool_name, arguments)
 
             if parse_json:
                 # Extract and parse JSON from result
