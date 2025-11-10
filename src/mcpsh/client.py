@@ -47,7 +47,11 @@ class MCPClient:
         if server_name not in servers_config:
             raise ValueError(f"Server '{server_name}' not found in configuration")
 
-        server_config = servers_config[server_name]
+        server_config = servers_config[server_name].copy()
+
+        # Set keep_alive to False for proper subprocess cleanup
+        if "keep_alive" not in server_config:
+            server_config["keep_alive"] = False
 
         # Create MCPConfig format for FastMCP Client
         self._mcp_config = {"mcpServers": {server_name: server_config}}

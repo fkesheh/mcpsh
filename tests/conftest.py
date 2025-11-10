@@ -55,9 +55,33 @@ def invalid_config_file():
     with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
         f.write("invalid json content {{{")
         temp_path = f.name
-    
+
     yield Path(temp_path)
-    
+
     # Cleanup
     Path(temp_path).unlink(missing_ok=True)
+
+
+@pytest.fixture(scope="module")
+def everything_config_file():
+    """Create a config file with the everything MCP server for integration testing."""
+    config = {
+        "mcpServers": {
+            "everything": {
+                "command": "npx",
+                "args": ["-y", "@modelcontextprotocol/server-everything"]
+            }
+        }
+    }
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        json.dump(config, f)
+        temp_path = f.name
+
+    yield Path(temp_path)
+
+    # Cleanup
+    Path(temp_path).unlink(missing_ok=True)
+
+
 
