@@ -1,4 +1,4 @@
-"""Main CLI application for interacting with MCP servers."""
+"""Progressive CLI implementation for mcpsh using Click."""
 
 import asyncio
 import json
@@ -8,101 +8,42 @@ import re
 import sys
 import warnings
 from pathlib import Path
-from typing import Optional, Dict, List, Union
+from typing import Optional, Union, Dict, List
 
-# Disable Rich tracebacks by default before importing typer
-os.environ.setdefault('_TYPER_STANDARD_TRACEBACK', '1')
-
-import typer
+import click
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.traceback import install as install_rich_traceback
 
 from fastmcp import Client
 
-from mcpsh.config import load_config, list_configured_servers, get_config_path
+from mcpsh.config import load_config, list_configured_servers
 
 # Global flag to track if we should show tracebacks
 _show_tracebacks = False
-
-app = typer.Typer(
-    help="""mcpsh - MCP Shell: Interact with Model Context Protocol servers
-
-Quick Start:
-    mcpsh servers                          # List configured servers
-    mcpsh config-path                      # Show which config is being used
-    mcpsh tools <server>                   # List available tools
-    mcpsh tool-info <server> <tool>        # Get tool details
-    mcpsh call <server> <tool> --args '{...}'  # Execute a tool
-
-Configuration:
-    Set MCPSH_CONFIG environment variable to avoid using --config flag:
-    export MCPSH_CONFIG=~/.mcpsh/mcp_config.json
-
-Common Examples:
-    mcpsh call my-server query --args '{"sql": "SELECT * FROM users"}'
-    mcpsh call my-server my-tool --args '{"param": "value"}'
-    mcpsh read my-server "resource://path/to/resource"
-
-Use --help on any command for detailed examples.
-""",
-    pretty_exceptions_show_locals=False  # Disable showing local variables in tracebacks (security!)
-)
-
-# Custom exception hook that suppresses tracebacks by default (unless --verbose is used)
-# This is a security measure to prevent API keys and secrets from being displayed
-_original_excepthook = sys.excepthook
-
-def secure_excepthook(exc_type, exc_value, exc_traceback):
-    """
-    Custom exception hook that only shows tracebacks in verbose mode.
-    
-    This is a security measure to prevent API keys and secrets in local
-    variables from being displayed. All exceptions are properly caught and
-    sanitized in the command functions.
-    """
-    # For typer.Exit, just exit silently
-    if exc_type.__name__ == 'Exit':
-        sys.exit(exc_value.exit_code if hasattr(exc_value, 'exit_code') else 1)
-    
-    # If verbose mode, show traceback
-    if _show_tracebacks:
-        _original_excepthook(exc_type, exc_value, exc_traceback)
-    else:
-        # Don't show anything (we already printed the error in our handlers)
-        # Just exit with code 1
-        sys.exit(1)
-
-sys.excepthook = secure_excepthook
 
 console = Console()
 
 
 def enable_verbose_tracebacks():
-    """Enable Rich tracebacks for verbose mode (but still hide locals for security)."""
+    """Enable Rich tracebacks for verbose mode."""
     global _show_tracebacks
     _show_tracebacks = True
-    # Install Rich traceback handler, but never show locals (security!)
-    install_rich_traceback(show_locals=False, suppress=[typer])
+    install_rich_traceback(show_locals=False)
 
 
 def suppress_logs():
     """Suppress all logging output and warnings."""
-    # Suppress Python warnings
     warnings.filterwarnings('ignore')
-    
-    # Configure root logger to only show CRITICAL messages
     logging.getLogger().setLevel(logging.CRITICAL)
-    
-    # Suppress specific loggers that are particularly verbose
+
     for logger_name in ['mcp', 'fastmcp', 'httpx', 'httpcore']:
         logging.getLogger(logger_name).setLevel(logging.CRITICAL)
-    
-    # Redirect stderr to devnull at file descriptor level (for subprocess logs)
+
     original_stderr_fd = os.dup(2)
     devnull_fd = os.open(os.devnull, os.O_WRONLY)
     os.dup2(devnull_fd, 2)
-    
+
     return original_stderr_fd, devnull_fd
 
 
@@ -113,36 +54,30 @@ def restore_logs(original_stderr_fd, devnull_fd):
             os.dup2(original_stderr_fd, 2)
             os.close(original_stderr_fd)
         except OSError:
-            # File descriptor already closed, ignore
             pass
     if devnull_fd:
         try:
             os.close(devnull_fd)
         except OSError:
-            # File descriptor already closed, ignore
             pass
 
 
 def json_to_markdown(data: Union[Dict, List, str, int, float, bool, None], level: int = 0) -> str:
     """Convert JSON data to Markdown format."""
     indent = "  " * level
-    
+
     if data is None:
         return f"{indent}*null*"
-    
     if isinstance(data, bool):
         return f"{indent}**{str(data).lower()}**"
-    
     if isinstance(data, (int, float)):
         return f"{indent}**{data}**"
-    
     if isinstance(data, str):
         return f"{indent}{data}"
-    
+
     if isinstance(data, list):
         if not data:
             return f"{indent}*empty list*"
-        
         md_lines = []
         for i, item in enumerate(data):
             if isinstance(item, dict):
@@ -151,11 +86,10 @@ def json_to_markdown(data: Union[Dict, List, str, int, float, bool, None], level
             else:
                 md_lines.append(f"{indent}- {json_to_markdown(item, 0).strip()}")
         return "\n".join(md_lines)
-    
+
     if isinstance(data, dict):
         if not data:
             return f"{indent}*empty object*"
-        
         md_lines = []
         for key, value in data.items():
             if isinstance(value, dict):
@@ -168,335 +102,259 @@ def json_to_markdown(data: Union[Dict, List, str, int, float, bool, None], level
                 formatted_value = json_to_markdown(value, 0).strip()
                 md_lines.append(f"{indent}**{key}:** {formatted_value}")
         return "\n".join(md_lines)
-    
+
     return f"{indent}{str(data)}"
 
 
-def sanitize_error_message(error: Exception) -> str:
-    """Sanitize error messages to prevent leaking secrets.
-    
-    This removes sensitive information like environment variables, API keys,
-    and command arguments from error messages before displaying them.
-    Also escapes Rich markup characters to prevent rendering issues.
-    """
-    error_str = str(error)
-    
-    # Pattern to match common secret patterns in error messages
-    # This includes env vars, tokens, keys, passwords, etc.
+def sanitize_error_message(error: Exception, escape_rich_markup: bool = True) -> str:
+    """Sanitize error messages to prevent leaking secrets."""
+    error_str = str(error).replace('\n', ' ')
+
     patterns = [
-        # Environment variable assignments (KEY=value)
         (r'(\w+)=([^\s,\}\]]+)', r'\1=***'),
-        # JSON objects with common secret keys
         (r'"(api[_-]?key|token|password|secret|auth|credential|bearer)["\s]*:[^,\}]+', r'"\1": "***"'),
-        # Single-quoted values that look like secrets (long alphanumeric strings)
         (r"'([a-zA-Z0-9_-]{20,})'", r"'***'"),
-        # Double-quoted values that look like secrets
         (r'"([a-zA-Z0-9_-]{20,})"', r'"***"'),
-        # Bearer tokens
         (r'Bearer\s+[a-zA-Z0-9_-]+', r'Bearer ***'),
-        # Basic auth
         (r'Basic\s+[a-zA-Z0-9+/=]+', r'Basic ***'),
     ]
-    
+
     sanitized = error_str
     for pattern, replacement in patterns:
         sanitized = re.sub(pattern, replacement, sanitized, flags=re.IGNORECASE)
-    
-    # Also remove any mention of 'env' dictionaries entirely
-    # This is more aggressive but safer
+
     sanitized = re.sub(r"'env':\s*\{[^}]*\}", "'env': {***}", sanitized)
     sanitized = re.sub(r'"env":\s*\{[^}]*\}', '"env": {***}', sanitized)
-    
-    # Escape Rich markup characters to prevent rendering errors
-    # Replace [ with \[ and ] with \] to prevent Rich from interpreting them as markup tags
-    sanitized = sanitized.replace('[', r'\[').replace(']', r'\]')
-    
+
+    if escape_rich_markup:
+        sanitized = sanitized.replace('[', r'\[').replace(']', r'\]')
+
     return sanitized
 
 
-@app.command()
-def servers(
-    config: Optional[Path] = typer.Option(
-        None,
-        "--config",
-        "-c",
-        help="Path to MCP configuration file"
-    ),
-    verbose: bool = typer.Option(
-        False,
-        "--verbose",
-        "-v",
-        help="Show detailed server logs and tracebacks"
-    )
-):
+# Create Click group
+@click.command(context_settings=dict(
+    help_option_names=['-h', '--help'],
+))
+@click.argument('args', nargs=-1)
+@click.option('--config', '-c', type=click.Path(exists=True), help='Path to MCP configuration file')
+@click.option('--format', '-f', 'format_type', default='markdown', help='Output format: markdown or json')
+@click.option('--verbose', '-v', is_flag=True, help='Show detailed logs')
+@click.option('--resources', is_flag=True, help='List resources from server')
+@click.option('--prompts', is_flag=True, help='List prompts from server')
+@click.option('--read', 'read_uri', type=str, help='Read resource URI')
+@click.option('--args', '-a', 'args_json', type=str, help='Tool arguments as JSON')
+@click.pass_context
+def cli(ctx, args, config, format_type, verbose, resources, prompts, read_uri, args_json):
     """
-    List all configured MCP servers.
-    
-    Examples:
-        mcpsh servers
-        mcpsh servers --config ~/my-config.json
-        mcpsh servers --verbose
+    mcpsh - MCP Shell: Progressive CLI for MCP servers
+
+    \b
+    Progressive Usage:
+        mcpsh                          # List servers
+        mcpsh <server>                 # List tools from server
+        mcpsh <server> <tool>          # Show tool info
+        mcpsh <server> <tool> --args '{...}'  # Execute tool
+
+    \b
+    Special flags:
+        mcpsh <server> --resources     # List resources
+        mcpsh <server> --prompts       # List prompts
+        mcpsh <server> --read <uri>    # Read resource
+
+    \b
+    Global options:
+        -f, --format json              # Output as JSON
+        -h, --help                     # Show help
+        -v, --verbose                  # Show detailed logs
     """
-    # Enable tracebacks in verbose mode
     if verbose:
         enable_verbose_tracebacks()
-    
-    # Suppress server logs by default
+
     stderr_fd, devnull_fd = (None, None)
     if not verbose:
         stderr_fd, devnull_fd = suppress_logs()
-    
+
     try:
-        server_names = list_configured_servers(config)
-        
-        console.print("[bold]Configured MCP Servers:[/bold]\n")
-        for name in server_names:
-            console.print(f"  [cyan]{name}[/cyan]")
-        
-        console.print(f"\n[dim]Total: {len(server_names)} servers[/dim]")
-        
-    except Exception as e:
-        if not verbose:
-            restore_logs(stderr_fd, devnull_fd)
-        console.print(f"[red]Error: {sanitize_error_message(e)}[/red]")
-        raise typer.Exit(1)
+        # Convert args tuple to list
+        args_list = list(args)
+
+        # Case 1: No arguments - list servers
+        if len(args_list) == 0:
+            _list_servers(config, format_type)
+
+        # Case 2: One argument (server) - check for special flags or list tools
+        elif len(args_list) == 1:
+            server = args_list[0]
+            if resources:
+                _list_resources(server, config, format_type)
+            elif prompts:
+                _list_prompts(server, config, format_type)
+            elif read_uri:
+                _read_resource(server, read_uri, config, format_type)
+            else:
+                _list_tools(server, config, format_type)
+
+        # Case 3: Two arguments (server tool) - show info or execute
+        elif len(args_list) == 2:
+            server, tool = args_list[0], args_list[1]
+            if args_json:
+                _execute_tool(server, tool, args_json, config, format_type)
+            else:
+                _show_tool_info(server, tool, config, format_type)
+
+        else:
+            click.echo("Error: Too many arguments", err=True)
+            ctx.exit(1)
+
     finally:
         if not verbose:
             restore_logs(stderr_fd, devnull_fd)
 
 
-@app.command(name="config-path")
-def config_path(
-    config: Optional[Path] = typer.Option(
-        None,
-        "--config",
-        "-c",
-        help="Path to MCP configuration file"
-    )
-):
-    """
-    Show which configuration file is being used.
-
-    Displays the resolved path and source of the configuration file based on the priority chain:
-    1. --config flag (if provided)
-    2. MCPSH_CONFIG environment variable
-    3. ~/.mcpsh/mcp_config.json (default location)
-    4. Claude Desktop config
-    5. Cursor config
-
-    Examples:
-        mcpsh config-path
-        mcpsh config-path --config ~/my-config.json
-        MCPSH_CONFIG=~/my-config.json mcpsh config-path
-    """
+def _list_servers(config: Optional[Path], format_type: str):
+    """List all configured servers."""
     try:
-        resolved_path, source = get_config_path(config)
+        if config:
+            config = Path(config)
+        servers = list_configured_servers(config)
 
-        console.print(f"[bold]Configuration file:[/bold] {resolved_path}")
-        console.print(f"[bold]Source:[/bold] {source}")
-
-        if resolved_path.exists():
-            console.print(f"[green]✓ File exists[/green]")
+        if format_type.lower() == "json":
+            click.echo(json.dumps(servers))
         else:
-            console.print(f"[yellow]⚠ File not found[/yellow]")
+            console.print("[bold]Configured MCP Servers:[/bold]\n")
+            for name in servers:
+                console.print(f"  [cyan]{name}[/cyan]")
+            console.print(f"\n[dim]Total: {len(servers)} servers[/dim]")
+            console.print(f"\n[dim]Next: mcpsh <server> to see tools[/dim]")
 
     except Exception as e:
-        console.print(f"[red]Error: {sanitize_error_message(e)}[/red]")
-        raise typer.Exit(1)
+        if format_type.lower() == "json":
+            click.echo(json.dumps({"error": sanitize_error_message(e, escape_rich_markup=False)}))
+        else:
+            console.print(f"[red]Error: {sanitize_error_message(e)}[/red]")
+        sys.exit(1)
 
 
-@app.command()
-def tools(
-    server: str = typer.Argument(..., help="Name of the MCP server"),
-    config: Optional[Path] = typer.Option(
-        None,
-        "--config",
-        "-c",
-        help="Path to MCP configuration file"
-    ),
-    detailed: bool = typer.Option(
-        False,
-        "--detailed",
-        "-d",
-        help="Show detailed information including input schemas"
-    ),
-    verbose: bool = typer.Option(
-        False,
-        "--verbose",
-        "-v",
-        help="Show detailed server logs and tracebacks"
-    )
-):
-    """
-    List all available tools from a server.
-    
-    Examples:
-        mcpsh tools my-server
-        mcpsh tools my-server --detailed
-        mcpsh tools my-server --verbose
-    """
-    # Enable tracebacks in verbose mode
-    if verbose:
-        enable_verbose_tracebacks()
-    
-    # Suppress server logs by default
-    stderr_fd, devnull_fd = (None, None)
-    if not verbose:
-        stderr_fd, devnull_fd = suppress_logs()
-    
-    async def _list_tools():
+def _list_tools(server: str, config: Optional[Path], format_type: str):
+    """List tools from a server."""
+    async def _async_list_tools():
         try:
-            servers_config = load_config(config)
-            
+            if config:
+                config_path = Path(config)
+            else:
+                config_path = None
+
+            servers_config = load_config(config_path)
+
             if server not in servers_config:
-                console.print(f"[red]Server '{server}' not found in configuration[/red]")
-                raise typer.Exit(1)
-            
+                error_msg = f"Server '{server}' not found in configuration"
+                if format_type.lower() == "json":
+                    click.echo(json.dumps({"error": error_msg}))
+                else:
+                    console.print(f"[red]{error_msg}[/red]")
+                sys.exit(1)
+
             server_config = servers_config[server]
-            
-            # Create MCPConfig format for Client
             mcp_config = {"mcpServers": {server: server_config}}
-            
+
             async with Client(mcp_config) as client:
                 tools_list = await client.list_tools()
-                
+
                 if not tools_list:
-                    console.print(f"[yellow]No tools found on server '{server}'[/yellow]")
+                    if format_type.lower() == "json":
+                        click.echo(json.dumps([]))
+                    else:
+                        console.print(f"[yellow]No tools found on server '{server}'[/yellow]")
                     return
-                
-                if detailed:
-                    # Show detailed information for each tool
-                    for i, tool in enumerate(tools_list):
-                        if i > 0:
-                            console.print()  # Add spacing between tools
-                        
-                        # Tool header
-                        console.print(f"\n[bold cyan]{tool.name}[/bold cyan]")
-                        if tool.description:
-                            console.print(f"[dim]{tool.description}[/dim]\n")
-                        
-                        # Input schema
-                        if hasattr(tool, 'inputSchema') and tool.inputSchema:
-                            schema_dict = tool.inputSchema
-                            if isinstance(schema_dict, dict):
-                                console.print("[bold]Input Schema:[/bold]")
-                                console.print(json.dumps(schema_dict, indent=2))
-                        else:
-                            console.print("[dim]No input schema available[/dim]")
+
+                if format_type.lower() == "json":
+                    tools_json = []
+                    for tool in tools_list:
+                        tool_dict = {
+                            "name": tool.name,
+                            "description": tool.description if hasattr(tool, 'description') else None
+                        }
+                        tools_json.append(tool_dict)
+                    click.echo(json.dumps(tools_json))
                 else:
-                    # Show simple list view
                     console.print(f"[bold]Tools from '{server}':[/bold]\n")
                     for tool in tools_list:
                         console.print(f"  [cyan]{tool.name}[/cyan]")
                         if tool.description:
                             console.print(f"    {tool.description}")
                         console.print()
-                
-                console.print(f"[dim]Total: {len(tools_list)} tools[/dim]")
-                
+
+                    console.print(f"[dim]Total: {len(tools_list)} tools[/dim]")
+                    console.print(f"\n[dim]Next: mcpsh {server} <tool> to see details[/dim]")
+
         except Exception as e:
-            if not verbose:
-                restore_logs(stderr_fd, devnull_fd)
-            console.print(f"[red]Error: {sanitize_error_message(e)}[/red]")
-            raise typer.Exit(1)
-    
-    try:
-        asyncio.run(_list_tools())
-    finally:
-        if not verbose:
-            restore_logs(stderr_fd, devnull_fd)
+            if format_type.lower() == "json":
+                click.echo(json.dumps({"error": sanitize_error_message(e, escape_rich_markup=False)}))
+            else:
+                console.print(f"[red]Error: {sanitize_error_message(e)}[/red]")
+            sys.exit(1)
+
+    asyncio.run(_async_list_tools())
 
 
-@app.command()
-def tool_info(
-    server: str = typer.Argument(..., help="Name of the MCP server"),
-    tool_name: str = typer.Argument(..., help="Name of the tool"),
-    config: Optional[Path] = typer.Option(
-        None,
-        "--config",
-        "-c",
-        help="Path to MCP configuration file"
-    ),
-    verbose: bool = typer.Option(
-        False,
-        "--verbose",
-        "-v",
-        help="Show detailed server logs and tracebacks"
-    )
-):
-    """
-    Show detailed information about a specific tool.
-    
-    Displays tool description, parameter details (including nested parameters),
-    and an example usage command with correct argument structure.
-    
-    Examples:
-        mcpsh tool-info my-server my-tool
-        mcpsh tool-info my-server query
-        mcpsh tool-info my-server run-script
-    """
-    # Enable tracebacks in verbose mode
-    if verbose:
-        enable_verbose_tracebacks()
-    
-    # Suppress server logs by default
-    stderr_fd, devnull_fd = (None, None)
-    if not verbose:
-        stderr_fd, devnull_fd = suppress_logs()
-    
-    async def _show_tool_info():
+def _show_tool_info(server: str, tool_name: str, config: Optional[Path], format_type: str):
+    """Show detailed information about a tool."""
+    async def _async_show_info():
         try:
-            servers_config = load_config(config)
-            
+            if config:
+                config_path = Path(config)
+            else:
+                config_path = None
+
+            servers_config = load_config(config_path)
+
             if server not in servers_config:
                 console.print(f"[red]Server '{server}' not found in configuration[/red]")
-                raise typer.Exit(1)
-            
+                sys.exit(1)
+
             server_config = servers_config[server]
-            
-            # Create MCPConfig format for Client
             mcp_config = {"mcpServers": {server: server_config}}
-            
+
             async with Client(mcp_config) as client:
                 tools_list = await client.list_tools()
-                
+
                 # Find the requested tool
                 tool = None
                 for t in tools_list:
                     if t.name == tool_name:
                         tool = t
                         break
-                
+
                 if not tool:
                     console.print(f"[red]Tool '{tool_name}' not found on server '{server}'[/red]")
                     console.print(f"\n[dim]Available tools:[/dim]")
                     for t in tools_list:
                         console.print(f"  - {t.name}")
-                    raise typer.Exit(1)
-                
+                    sys.exit(1)
+
                 # Display tool information
                 console.print(f"\n[bold cyan]Tool: {tool.name}[/bold cyan]")
                 console.print(f"[dim]Server: {server}[/dim]\n")
-                
+
                 if tool.description:
                     console.print(f"[bold]Description:[/bold]")
                     console.print(tool.description)
                     console.print()
-                
+
                 # Input schema
                 if hasattr(tool, 'inputSchema') and tool.inputSchema:
                     schema_dict = tool.inputSchema
                     if isinstance(schema_dict, dict):
-                        # Extract and display required/optional parameters
                         if 'properties' in schema_dict:
                             console.print("\n[bold]Parameters:[/bold]")
                             required = schema_dict.get('required', [])
                             defs = schema_dict.get('$defs', {})
-                            
+
                             for param_name, param_info in schema_dict['properties'].items():
                                 is_required = param_name in required
                                 req_label = "[red]*[/red]" if is_required else "[dim](optional)[/dim]"
-                                
+
                                 # Check if this is a $ref to resolve it
                                 if '$ref' in param_info:
                                     ref_path = param_info['$ref'].split('/')[-1]
@@ -504,11 +362,11 @@ def tool_info(
                                         resolved = defs[ref_path]
                                         param_type = resolved.get('type', 'object')
                                         param_desc = resolved.get('description', '')
-                                        
+
                                         console.print(f"  • [cyan]{param_name}[/cyan] {req_label} - [yellow]{param_type}[/yellow]")
                                         if param_desc:
                                             console.print(f"    {param_desc}")
-                                        
+
                                         # Show nested properties
                                         if 'properties' in resolved:
                                             nested_required = resolved.get('required', [])
@@ -522,12 +380,12 @@ def tool_info(
                                 else:
                                     param_type = param_info.get('type', 'unknown')
                                     param_desc = param_info.get('description', '')
-                                    
+
                                     console.print(f"  • [cyan]{param_name}[/cyan] {req_label} - [yellow]{param_type}[/yellow]")
                                     if param_desc:
                                         console.print(f"    {param_desc}")
-                        
-                        # Show example usage with properly nested structure
+
+                        # Show example usage
                         console.print("\n[bold]Example Usage:[/bold]")
                         example_args = {}
                         if 'properties' in schema_dict:
@@ -548,7 +406,7 @@ def tool_info(
                                                     nested_type = nested_info.get('type', 'string')
                                                     if nested_type == 'string':
                                                         nested_example[nested_name] = "example_value"
-                                                    elif nested_type == 'number' or nested_type == 'integer':
+                                                    elif nested_type in ('number', 'integer'):
                                                         nested_example[nested_name] = 0
                                                     elif nested_type == 'boolean':
                                                         nested_example[nested_name] = True
@@ -557,7 +415,7 @@ def tool_info(
                                     param_type = param_info.get('type', 'string')
                                     if param_type == 'string':
                                         example_args[param_name] = "example_value"
-                                    elif param_type == 'number' or param_type == 'integer':
+                                    elif param_type in ('number', 'integer'):
                                         example_args[param_name] = 0
                                     elif param_type == 'boolean':
                                         example_args[param_name] = True
@@ -565,201 +423,122 @@ def tool_info(
                                         example_args[param_name] = []
                                     elif param_type == 'object':
                                         example_args[param_name] = {}
-                        
-                        example_cmd = f"mcpsh call {server} {tool_name} --args '{json.dumps(example_args)}'"
+
+                        example_cmd = f"mcpsh {server} {tool_name} --args '{json.dumps(example_args)}'"
                         console.print(example_cmd)
                 else:
                     console.print("[yellow]No input schema available[/yellow]")
-                
+
         except Exception as e:
-            if not verbose:
-                restore_logs(stderr_fd, devnull_fd)
             console.print(f"[red]Error: {sanitize_error_message(e)}[/red]")
-            raise typer.Exit(1)
-    
-    try:
-        asyncio.run(_show_tool_info())
-    finally:
-        if not verbose:
-            restore_logs(stderr_fd, devnull_fd)
+            sys.exit(1)
+
+    asyncio.run(_async_show_info())
 
 
-@app.command()
-def call(
-    server: str = typer.Argument(..., help="Name of the MCP server"),
-    tool: str = typer.Argument(..., help="Name of the tool to call"),
-    args_json: Optional[str] = typer.Option(
-        None,
-        "--args",
-        "-a",
-        help="Tool arguments as JSON string (use single quotes around JSON, double quotes inside)"
-    ),
-    config: Optional[Path] = typer.Option(
-        None,
-        "--config",
-        "-c",
-        help="Path to MCP configuration file"
-    ),
-    format_type: str = typer.Option(
-        "markdown",
-        "--format",
-        "-f",
-        help="Output format: markdown (default) or json"
-    ),
-    verbose: bool = typer.Option(
-        False,
-        "--verbose",
-        "-v",
-        help="Show detailed server logs and tracebacks"
-    )
-):
-    """
-    Call a tool on an MCP server.
-
-    IMPORTANT: Arguments must be valid JSON with proper quoting:
-      ✓ Correct:   --args '{"key": "value"}'    (single quotes outside, double inside)
-      ✗ Wrong:     --args {"key": "value"}      (missing outer quotes)
-      ✗ Wrong:     --args "{'key': 'value'}"    (Python dict, not JSON)
-
-    Use 'mcpsh tool-info <server> <tool>' to see parameter requirements first.
-
-    Examples:
-        # Simple tool with no arguments
-        mcpsh call my-server list-items
-
-        # Tool with simple arguments (note the quotes!)
-        mcpsh call my-server query --args '{"sql": "SELECT * FROM users LIMIT 5"}'
-
-        # Tool with nested arguments
-        mcpsh call my-server run-query --args '{"query_input": {"query": "SELECT count(*) FROM table"}}'
-
-        # Output in JSON format (markdown is default)
-        mcpsh call my-server my-tool --args '{"param": "value"}' --format json
-        mcpsh call my-server my-tool --args '{"param": "value"}' -f json
-
-        # Using environment variable for config
-        export MCPSH_CONFIG=~/.mcpsh/mcp_config.json
-        mcpsh call my-server my-tool --args '{"param": "value"}'
-    """
-    # Enable tracebacks in verbose mode
-    if verbose:
-        enable_verbose_tracebacks()
-    
-    # Suppress server logs by default
-    stderr_fd, devnull_fd = (None, None)
-    if not verbose:
-        stderr_fd, devnull_fd = suppress_logs()
-    
-    async def _call_tool():
+def _execute_tool(server: str, tool_name: str, args_json: str, config: Optional[Path], format_type: str):
+    """Execute a tool with arguments."""
+    async def _async_execute():
         try:
-            servers_config = load_config(config)
-            
+            if config:
+                config_path = Path(config)
+            else:
+                config_path = None
+
+            servers_config = load_config(config_path)
+
             if server not in servers_config:
-                console.print(f"[red]Server '{server}' not found in configuration[/red]")
-                raise typer.Exit(1)
-            
+                error_msg = f"Server '{server}' not found in configuration"
+                if format_type.lower() == "json":
+                    click.echo(json.dumps({"error": error_msg}))
+                else:
+                    console.print(f"[red]{error_msg}[/red]")
+                sys.exit(1)
+
             server_config = servers_config[server]
-            
+
             # Parse arguments
-            arguments = {}
-            if args_json:
-                try:
-                    arguments = json.loads(args_json)
-                except json.JSONDecodeError as e:
-                    console.print(f"[red]Invalid JSON in arguments: {e}[/red]")
-                    raise typer.Exit(1)
-            
+            try:
+                arguments = json.loads(args_json)
+            except json.JSONDecodeError as e:
+                if format_type.lower() == "json":
+                    error_msg = f"Invalid JSON in arguments: {sanitize_error_message(e, escape_rich_markup=False)}"
+                    click.echo(json.dumps({"error": error_msg}))
+                else:
+                    error_msg = f"Invalid JSON in arguments: {sanitize_error_message(e)}"
+                    console.print(f"[red]{error_msg}[/red]")
+                sys.exit(1)
+
             # Create MCPConfig format for Client
             mcp_config = {"mcpServers": {server: server_config}}
-            
-            with console.status(f"[bold green]Calling tool '{tool}'..."):
-                async with Client(mcp_config) as client:
-                    # Construct tool name with server prefix if needed
-                    tool_name = f"{server}_{tool}" if "_" not in tool else tool
-                    
-                    # Try with prefix first, then without
-                    try:
-                        result = await client.call_tool(tool_name, arguments)
-                    except Exception:
-                        # Try without prefix
-                        result = await client.call_tool(tool, arguments)
-                    
-                    # Display result
-                    console.print("[bold green]✓ Tool executed successfully[/bold green]\n")
-                    
-                    # Show content blocks
-                    if result.content:
-                        for i, content in enumerate(result.content):
-                            if hasattr(content, 'text'):
-                                text_content = content.text
-                                
-                                # Check format type
-                                if format_type.lower() == "json":
-                                    # Explicit JSON format - print as-is (disable markup to avoid bracket interpretation)
-                                    console.print(text_content, markup=False)
-                                else:
-                                    # Default markdown format
-                                    try:
-                                        # Try to parse as JSON
-                                        json_data = json.loads(text_content)
-                                        # Convert to markdown
-                                        md_output = json_to_markdown(json_data)
-                                        # Render the markdown
-                                        console.print(Markdown(md_output))
-                                    except json.JSONDecodeError:
-                                        # If not JSON, just print as-is
-                                        console.print(text_content)
-                
+
+            async with Client(mcp_config) as client:
+                # Construct tool name with server prefix if needed
+                full_tool_name = f"{server}_{tool_name}" if "_" not in tool_name else tool_name
+
+                # Try with prefix first, then without
+                try:
+                    result = await client.call_tool(full_tool_name, arguments)
+                except Exception:
+                    # Try without prefix
+                    result = await client.call_tool(tool_name, arguments)
+
+                # Show content blocks
+                if result.content:
+                    if format_type.lower() != "json":
+                        console.print("[bold green]✓ Tool executed successfully[/bold green]\n")
+
+                    for content in result.content:
+                        if hasattr(content, 'text'):
+                            text_content = content.text
+
+                            if format_type.lower() == "json":
+                                click.echo(text_content)
+                            else:
+                                try:
+                                    json_data = json.loads(text_content)
+                                    md_output = json_to_markdown(json_data)
+                                    console.print(Markdown(md_output))
+                                except json.JSONDecodeError:
+                                    console.print(text_content)
+
         except Exception as e:
-            if not verbose:
-                restore_logs(stderr_fd, devnull_fd)
-            console.print(f"[red]Error: {sanitize_error_message(e)}[/red]")
-            raise typer.Exit(1)
-    
-    try:
-        asyncio.run(_call_tool())
-    finally:
-        if not verbose:
-            restore_logs(stderr_fd, devnull_fd)
+            if format_type.lower() == "json":
+                error_msg = sanitize_error_message(e, escape_rich_markup=False)
+                click.echo(json.dumps({"error": error_msg}))
+            else:
+                error_msg = sanitize_error_message(e)
+                console.print(f"[red]Error: {error_msg}[/red]")
+            sys.exit(1)
+
+    asyncio.run(_async_execute())
 
 
-@app.command()
-def resources(
-    server: str = typer.Argument(..., help="Name of the MCP server"),
-    config: Optional[Path] = typer.Option(
-        None,
-        "--config",
-        "-c",
-        help="Path to MCP configuration file"
-    )
-):
-    """
-    List all available resources from a server.
-    
-    Examples:
-        mcpsh resources my-server
-        mcpsh resources my-server --config ~/config.json
-    """
-    async def _list_resources():
+def _list_resources(server: str, config: Optional[Path], format_type: str):
+    """List resources from a server."""
+    async def _async_list():
         try:
-            servers_config = load_config(config)
-            
+            if config:
+                config_path = Path(config)
+            else:
+                config_path = None
+
+            servers_config = load_config(config_path)
+
             if server not in servers_config:
                 console.print(f"[red]Server '{server}' not found in configuration[/red]")
-                raise typer.Exit(1)
-            
+                sys.exit(1)
+
             server_config = servers_config[server]
-            
-            # Create MCPConfig format for Client
             mcp_config = {"mcpServers": {server: server_config}}
-            
+
             async with Client(mcp_config) as client:
                 resources_list = await client.list_resources()
-                
+
                 if not resources_list:
                     console.print(f"[yellow]No resources found on server '{server}'[/yellow]")
                     return
-                
+
                 console.print(f"[bold]Resources from '{server}':[/bold]\n")
                 for resource in resources_list:
                     console.print(f"  [cyan]{resource.uri}[/cyan]")
@@ -769,168 +548,41 @@ def resources(
                     if mime:
                         console.print(f"    Type: {mime}")
                     console.print()
-                
+
                 console.print(f"[dim]Total: {len(resources_list)} resources[/dim]")
-                
+
         except Exception as e:
             console.print(f"[red]Error: {sanitize_error_message(e)}[/red]")
-            raise typer.Exit(1)
-    
-    asyncio.run(_list_resources())
+            sys.exit(1)
+
+    asyncio.run(_async_list())
 
 
-@app.command()
-def read(
-    server: str = typer.Argument(..., help="Name of the MCP server"),
-    uri: str = typer.Argument(..., help="Resource URI to read"),
-    config: Optional[Path] = typer.Option(
-        None,
-        "--config",
-        "-c",
-        help="Path to MCP configuration file"
-    )
-):
-    """
-    Read a resource from an MCP server.
-    
-    Examples:
-        mcpsh read my-server "resource://path/to/resource"
-        mcpsh read my-server "data://example/info"
-        mcpsh read my-server "schema://public/users"
-    """
-    async def _read_resource():
+def _list_prompts(server: str, config: Optional[Path], format_type: str):
+    """List prompts from a server."""
+    async def _async_list():
         try:
-            servers_config = load_config(config)
-            
+            if config:
+                config_path = Path(config)
+            else:
+                config_path = None
+
+            servers_config = load_config(config_path)
+
             if server not in servers_config:
                 console.print(f"[red]Server '{server}' not found in configuration[/red]")
-                raise typer.Exit(1)
-            
+                sys.exit(1)
+
             server_config = servers_config[server]
-            
-            # Create MCPConfig format for Client
             mcp_config = {"mcpServers": {server: server_config}}
-            
-            with console.status(f"[bold green]Reading resource '{uri}'..."):
-                async with Client(mcp_config) as client:
-                    content_list = await client.read_resource(uri)
-                    
-                    console.print("[bold green]✓ Resource read successfully[/bold green]\n")
-                    
-                    for i, content in enumerate(content_list):
-                        if hasattr(content, 'text'):
-                            # Text content
-                            console.print(content.text)
-                        elif hasattr(content, 'blob'):
-                            # Binary content
-                            console.print(f"[dim]Binary data: {len(content.blob)} bytes[/dim]")
-                
-        except Exception as e:
-            console.print(f"[red]Error: {sanitize_error_message(e)}[/red]")
-            raise typer.Exit(1)
-    
-    asyncio.run(_read_resource())
 
-
-@app.command()
-def info(
-    server: str = typer.Argument(..., help="Name of the MCP server"),
-    config: Optional[Path] = typer.Option(
-        None,
-        "--config",
-        "-c",
-        help="Path to MCP configuration file"
-    )
-):
-    """
-    Show detailed information about a server.
-    
-    Displays server configuration, connection status, and counts of
-    available tools, resources, and prompts.
-    
-    Examples:
-        mcpsh info my-server
-        mcpsh info my-server --config ~/config.json
-    """
-    async def _show_info():
-        try:
-            servers_config = load_config(config)
-            
-            if server not in servers_config:
-                console.print(f"[red]Server '{server}' not found in configuration[/red]")
-                raise typer.Exit(1)
-            
-            server_config = servers_config[server]
-            
-            # Display server configuration
-            console.print(f"[bold cyan]Server Configuration: {server}[/bold cyan]")
-            console.print(json.dumps(server_config, indent=2))
-            
-            # Try to connect and get server info
-            mcp_config = {"mcpServers": {server: server_config}}
-            
-            with console.status("[bold green]Connecting to server..."):
-                async with Client(mcp_config) as client:
-                    # Ping server
-                    await client.ping()
-                    
-                    # Get counts
-                    tools_list = await client.list_tools()
-                    resources_list = await client.list_resources()
-                    prompts_list = await client.list_prompts()
-                    
-                    # Display summary
-                    console.print("[bold green]✓ Server is responding[/bold green]\n")
-                    
-                    console.print("[bold]Server Capabilities:[/bold]")
-                    console.print(f"  Tools: {len(tools_list)}")
-                    console.print(f"  Resources: {len(resources_list)}")
-                    console.print(f"  Prompts: {len(prompts_list)}")
-                
-        except Exception as e:
-            console.print(f"[red]Error: {sanitize_error_message(e)}[/red]")
-            raise typer.Exit(1)
-    
-    asyncio.run(_show_info())
-
-
-@app.command()
-def prompts(
-    server: str = typer.Argument(..., help="Name of the MCP server"),
-    config: Optional[Path] = typer.Option(
-        None,
-        "--config",
-        "-c",
-        help="Path to MCP configuration file"
-    )
-):
-    """
-    List all available prompts from a server.
-    
-    Examples:
-        mcpsh prompts my-server
-        mcpsh prompts my-server --config ~/config.json
-    """
-    async def _list_prompts():
-        try:
-            servers_config = load_config(config)
-            
-            if server not in servers_config:
-                console.print(f"[red]Server '{server}' not found in configuration[/red]")
-                raise typer.Exit(1)
-            
-            server_config = servers_config[server]
-            
-            # Create MCPConfig format for Client
-            mcp_config = {"mcpServers": {server: server_config}}
-            
             async with Client(mcp_config) as client:
                 prompts_list = await client.list_prompts()
-                
+
                 if not prompts_list:
                     console.print(f"[yellow]No prompts found on server '{server}'[/yellow]")
                     return
-                
+
                 console.print(f"[bold]Prompts from '{server}':[/bold]\n")
                 for prompt in prompts_list:
                     console.print(f"  [cyan]{prompt.name}[/cyan]")
@@ -940,21 +592,56 @@ def prompts(
                         arg_names = [arg.name for arg in prompt.arguments]
                         console.print(f"    Arguments: {', '.join(arg_names)}")
                     console.print()
-                
+
                 console.print(f"[dim]Total: {len(prompts_list)} prompts[/dim]")
-                
+
         except Exception as e:
             console.print(f"[red]Error: {sanitize_error_message(e)}[/red]")
-            raise typer.Exit(1)
-    
-    asyncio.run(_list_prompts())
+            sys.exit(1)
+
+    asyncio.run(_async_list())
+
+
+def _read_resource(server: str, uri: str, config: Optional[Path], format_type: str):
+    """Read a resource from a server."""
+    async def _async_read():
+        try:
+            if config:
+                config_path = Path(config)
+            else:
+                config_path = None
+
+            servers_config = load_config(config_path)
+
+            if server not in servers_config:
+                console.print(f"[red]Server '{server}' not found in configuration[/red]")
+                sys.exit(1)
+
+            server_config = servers_config[server]
+            mcp_config = {"mcpServers": {server: server_config}}
+
+            async with Client(mcp_config) as client:
+                content_list = await client.read_resource(uri)
+
+                console.print("[bold green]✓ Resource read successfully[/bold green]\n")
+
+                for content in content_list:
+                    if hasattr(content, 'text'):
+                        console.print(content.text)
+                    elif hasattr(content, 'blob'):
+                        console.print(f"[dim]Binary data: {len(content.blob)} bytes[/dim]")
+
+        except Exception as e:
+            console.print(f"[red]Error: {sanitize_error_message(e)}[/red]")
+            sys.exit(1)
+
+    asyncio.run(_async_read())
 
 
 def main():
     """Entry point for the CLI."""
-    app()
+    cli()
 
 
 if __name__ == "__main__":
     main()
-

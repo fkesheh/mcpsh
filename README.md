@@ -1,11 +1,13 @@
 # mcpsh
 
-A clean, simple command-line interface for interacting with Model Context Protocol (MCP) servers using FastMCP.
+A progressive CLI and Python API for interacting with Model Context Protocol (MCP) servers using FastMCP.
 
 **Transform any MCP server into a CLI tool** - perfect for AI agents, automation scripts, and manual operations. Get the rich ecosystem of MCP tools with the simplicity and universality of the command line.
 
 ## Features
 
+- 🎯 **Progressive Interface** - Natural, intuitive command flow that guides you through discovery
+- 🐍 **Python API** - Import directly in Python scripts for programmatic access
 - 🚀 **Simple & Fast** - Built with FastMCP for reliable MCP communication
 - ⚡ **Zero Install** - Run with `uvx mcpsh` without installation
 - 📋 **List & Discover** - Explore tools, resources, and prompts from any MCP server
@@ -49,21 +51,34 @@ Claude Skills allow you to upload code that Claude can execute. However, **[skil
 - ✅ **Better tool access** - Use `mcpsh` in your skills to access databases, APIs, monitoring tools, etc.
 - ✅ **Universal & future-proof** - MCP protocol vs proprietary Claude feature
 
-**Example skill using mcpsh:**
+**Example skill using mcpsh CLI:**
 
 ```python
 # In a skill-mcp skill script
 import subprocess
 import json
 
-# Query database using mcpsh
+# Query database using mcpsh progressive CLI
 result = subprocess.run([
-    "mcpsh", "call", "postgres", "query",
+    "mcpsh", "postgres", "query",
     "--args", '{"sql": "SELECT * FROM users WHERE active = true"}',
     "-f", "json"
 ], capture_output=True, text=True)
 
-data = json.loads(result.stdout.split('\n')[-2])  # Skip success message
+data = json.loads(result.stdout)  # Pure JSON output - no need to skip lines!
+# Process data...
+```
+
+**Even better - use the Python API:**
+
+```python
+# In a skill-mcp skill script
+from mcpsh import call_tool
+
+# Query database - much cleaner!
+data = call_tool("postgres", "query",
+    {"sql": "SELECT * FROM users WHERE active = true"},
+    parse_json=True)
 # Process data...
 ```
 
@@ -71,14 +86,14 @@ data = json.loads(result.stdout.split('\n')[-2])  # Skip success message
 
 ```bash
 # AI coding assistant queries your database
-mcpsh call postgres query --args '{"sql": "SELECT * FROM users WHERE active = true"}'
+mcpsh postgres query --args '{"sql": "SELECT * FROM users WHERE active = true"}'
 
-# AI ops agent checks production metrics  
-mcpsh call new-relic run_nrql_query --args '{"query_input": {"nrql": "SELECT count(*) FROM Transaction WHERE appName = 'api' SINCE 1 hour ago"}}'
+# AI ops agent checks production metrics
+mcpsh new-relic run_nrql_query --args '{"query_input": {"nrql": "SELECT count(*) FROM Transaction WHERE appName = 'api' SINCE 1 hour ago"}}'
 
 # AI assistant manages your infrastructure
-mcpsh call databricks list_clusters
-mcpsh call skill-mcp run_skill_script --args '{"skill_name": "deploy", "script_path": "deploy.py"}'
+mcpsh databricks list_clusters --args '{}'
+mcpsh skill-mcp run_skill_script --args '{"skill_name": "deploy", "script_path": "deploy.py"}'
 ```
 
 ### 🌉 **Bridge Between Worlds**
@@ -95,8 +110,8 @@ Get the **best of both**:
 
 ```bash
 # Option 1: Run directly with uvx (no installation required)
-uvx mcpsh servers
-uvx mcpsh call <server> <tool> --args '{...}'
+uvx mcpsh
+uvx mcpsh <server> <tool> --args '{...}'
 
 # Option 2: Install from PyPI
 pip install mcpsh
@@ -116,7 +131,7 @@ uv pip install -e .
 If you already have Claude Desktop installed and configured, the CLI will automatically use it:
 
 ```bash
-mcpsh servers
+mcpsh
 ```
 
 #### Option 2: Create Custom Configuration
@@ -140,32 +155,60 @@ cat > ~/.mcpsh/mcp_config.json << 'EOF'
 EOF
 ```
 
-### Basic Workflow
+### Progressive CLI Workflow
+
+The CLI uses a progressive interface - each command level adds more context:
 
 ```bash
-# 1. List your servers
-mcpsh servers
+# 1. Start with no arguments - see available servers
+mcpsh
 
-# 2. Explore a server
-mcpsh info postgres
+# 2. Add server name - see available tools
+mcpsh postgres
 
-# 3. List available tools
-mcpsh tools postgres
+# 3. Add tool name - see tool info and example usage
+mcpsh postgres query
 
-# 4. Get detailed info about a tool
-mcpsh tool-info postgres query
+# 4. Add arguments - execute the tool
+mcpsh postgres query --args '{"sql": "SELECT * FROM users LIMIT 5"}'
 
-# 5. Call a tool
-mcpsh call postgres list_tables
+# Use -f json for pure JSON output (perfect for scripting)
+mcpsh postgres query --args '{"sql": "SELECT * FROM users LIMIT 5"}' -f json
 
-# 6. Call a tool with arguments (output in Markdown format by default)
-mcpsh call postgres query --args '{"sql": "SELECT * FROM users LIMIT 5"}'
+# Get help at any level with -h
+mcpsh -h
+mcpsh postgres -h
+mcpsh postgres query -h
+```
 
-# 7. Get results in JSON format
-mcpsh call postgres query --args '{"sql": "SELECT * FROM users LIMIT 5"}' --format json
+### Python API Workflow
 
-# 8. Verbose mode - show server logs (for debugging)
-mcpsh tools postgres --verbose
+Import mcpsh directly in Python scripts for programmatic access:
+
+```python
+from mcpsh import MCPClient, call_tool, list_tools
+
+# Option 1: Use convenience functions (simplest)
+result = call_tool("postgres", "query", {"sql": "SELECT * FROM users LIMIT 5"})
+tools = list_tools("postgres")
+
+# Option 2: Use MCPClient for more control
+with MCPClient("postgres") as client:
+    tools = client.list_tools()
+    result = client.call_tool("query", {"sql": "SELECT * FROM users"})
+
+    # Parse JSON results automatically
+    data = client.call_tool("query", {"sql": "SELECT * FROM users"}, parse_json=True)
+    print(data["users"][0])
+
+# Async support
+import asyncio
+
+async def main():
+    async with MCPClient("postgres") as client:
+        result = await client.call_tool("query", {"sql": "SELECT * FROM users"})
+
+asyncio.run(main())
 ```
 
 ## Configuration
@@ -221,215 +264,180 @@ The CLI supports the standard MCP configuration format:
 }
 ```
 
-## Commands
+## Progressive CLI Commands
 
-### List Servers
+The progressive CLI adapts based on the number of arguments you provide:
+
+### No Arguments - List Servers
 
 ```bash
-mcpsh servers [--config PATH] [--verbose]
+mcpsh [--config PATH] [-f FORMAT]
 ```
 
 Lists all configured MCP servers with their status.
 
-**Options:**
-- `--config`, `-c` - Path to MCP configuration file
-- `--verbose`, `-v` - Show detailed server logs (suppressed by default)
-
-### Show Configuration Path
+**Examples:**
 
 ```bash
-mcpsh config-path [--config PATH]
+# List servers in Markdown format (default)
+mcpsh
+
+# List servers in JSON format
+mcpsh -f json
+
+# Use custom config
+mcpsh --config ./my_config.json
 ```
 
-Shows which configuration file is being used and its source.
+### One Argument - List Tools
+
+```bash
+mcpsh <server-name> [--config PATH] [-f FORMAT] [--resources] [--prompts]
+```
+
+Lists all available tools from a server.
 
 **Options:**
-- `--config`, `-c` - Path to MCP configuration file
+- `--resources` - List resources instead of tools
+- `--prompts` - List prompts instead of tools
 
 **Examples:**
 
 ```bash
-# Check which config is being used
-mcpsh config-path
+# List tools from a server
+mcpsh postgres
 
-# Output:
-# Configuration file: /Users/username/.mcpsh/mcp_config.json
-# Source: default location (~/.mcpsh/mcp_config.json)
-# ✓ File exists
+# List tools in JSON format
+mcpsh postgres -f json
 
-# With environment variable
-export MCPSH_CONFIG=~/.mcpsh/my_config.json
-mcpsh config-path
-# Output shows: Source: MCPSH_CONFIG environment variable
+# List resources instead
+mcpsh postgres --resources
+
+# List prompts
+mcpsh postgres --prompts
 ```
 
-### Show Server Info
+### Two Arguments - Show Tool Info or Execute
 
 ```bash
-mcpsh info <server-name> [--config PATH]
+mcpsh <server-name> <tool-name> [--args JSON] [--config PATH] [-f FORMAT]
 ```
 
-Shows detailed information about a server including:
-- Server configuration
-- Connection status
-- Number of tools, resources, and prompts
+Without `--args`: Shows detailed tool information including parameters and example usage.
 
-### List Tools
-
-```bash
-mcpsh tools <server-name> [--config PATH] [--detailed] [--verbose]
-```
-
-Lists all available tools from a server with their descriptions.
-
-**Options:**
-- `--config`, `-c` - Path to MCP configuration file
-- `--detailed`, `-d` - Show detailed information including input schemas for all tools
-- `--verbose`, `-v` - Show detailed server logs (suppressed by default)
+With `--args`: Executes the tool with the provided arguments.
 
 **Examples:**
 
 ```bash
-# Simple list of tools (clean output by default)
-mcpsh tools postgres
+# Get detailed info about a tool
+mcpsh postgres query
 
-# Detailed view with input schemas
-mcpsh tools postgres --detailed
+# Execute tool with arguments
+mcpsh postgres query --args '{"sql": "SELECT * FROM users LIMIT 5"}'
 
-# Show server logs for debugging
-mcpsh tools postgres --verbose
-```
-
-### Get Tool Info
-
-```bash
-mcpsh tool-info <server-name> <tool-name> [--config PATH]
-```
-
-Shows detailed information about a specific tool including:
-- Tool description
-- Complete input schema (JSON Schema format)
-- Parameter details (required/optional, types, descriptions)
-- Example usage command
-
-**Examples:**
-
-```bash
-# Get details about a specific tool
-mcpsh tool-info new_relic_mcp run_nrql_query
-
-# Check parameter requirements before calling a tool
-mcpsh tool-info postgres query
-```
-
-### Call a Tool
-
-```bash
-mcpsh call <server-name> <tool-name> [--args JSON] [--format FORMAT] [--config PATH] [--verbose]
-```
-
-Executes a tool on an MCP server. Output is clean by default (server logs suppressed).
-
-**Options:**
-- `--args`, `-a` - Tool arguments as JSON string
-- `--config`, `-c` - Path to MCP configuration file
-- `--format`, `-f` - Output format: `markdown` (default) or `json`
-- `--verbose`, `-v` - Show detailed server logs (suppressed by default)
-
-**Examples:**
-
-```bash
-# Simple tool (no arguments)
-mcpsh call postgres list_tables
-
-# Tool with arguments
-mcpsh call postgres query --args '{"sql": "SELECT * FROM users LIMIT 5"}'
+# Execute with JSON output (perfect for scripting)
+mcpsh postgres query --args '{"sql": "SELECT * FROM users"}' -f json
 
 # Complex nested arguments
-mcpsh call shippo-new-relic-mcp run_nrql_query --args '{
+mcpsh new-relic run_nrql_query --args '{
   "query_input": {
     "nrql": "SELECT count(*) FROM Transaction SINCE 1 hour ago"
   }
 }'
-
-# Output in Markdown format (default - more readable):
-# ✓ Tool executed successfully
-# 
-# results:
-#   • Item 1: count: 4246161
-# query_id: null
-# completed: true
-# ...
-
-# Output in JSON format (use --format json):
-mcpsh call shippo-new-relic-mcp run_nrql_query --args '{
-  "query_input": {
-    "nrql": "SELECT count(*) FROM Transaction SINCE 1 hour ago"
-  }
-}' --format json
-
-# Or use shorthand:
-mcpsh call postgres query --args '{"sql": "SELECT * FROM users"}' -f json
-
-# Show server logs for debugging
-mcpsh call postgres query --args '{"sql": "SELECT * FROM users"}' --verbose
 ```
 
-### List Resources
+### Special Flags Available at All Levels
 
-```bash
-mcpsh resources <server-name> [--config PATH]
-```
-
-Lists all available resources from a server.
-
-### Read a Resource
-
-```bash
-mcpsh read <server-name> <resource-uri> [--config PATH]
-```
-
-Reads and displays the content of a resource.
+**Common Options:**
+- `--config`, `-c` - Path to MCP configuration file
+- `--format`, `-f` - Output format: `markdown` (default) or `json`
+- `--help`, `-h` - Show help message
 
 **Examples:**
 
 ```bash
-# Read static resource
-mcpsh read example "data://example/info"
+# Get help at any level
+mcpsh -h
+mcpsh postgres -h
+mcpsh postgres query -h
 
-# Read templated resource
-mcpsh read example "data://example/apple"
-
-# Read skill documentation
-mcpsh read skill-mcp "skill://data-analysis/SKILL.md"
+# Use JSON format at any level
+mcpsh -f json
+mcpsh postgres -f json
+mcpsh postgres query --args '{"sql": "SELECT 1"}' -f json
 ```
 
-### List Prompts
+### Resource Operations
+
+Resources are accessed using special flags:
+
+**CLI:**
 
 ```bash
-mcpsh prompts <server-name> [--config PATH]
+# List resources from a server
+mcpsh <server-name> --resources
+
+# Read a specific resource
+mcpsh <server-name> --read <resource-uri>
+
+# List prompts from a server
+mcpsh <server-name> --prompts
 ```
 
-Lists all available prompts from a server.
+**Examples:**
+
+```bash
+# List all resources
+mcpsh skill-mcp --resources
+
+# Read specific resource
+mcpsh skill-mcp --read "skill://data-analysis/SKILL.md"
+
+# List prompts
+mcpsh skill-mcp --prompts
+
+# Works with -f json too
+mcpsh skill-mcp --resources -f json
+```
+
+**Python API:**
+
+```python
+from mcpsh import MCPClient, list_resources, read_resource
+
+# Use convenience functions
+resources = list_resources("skill-mcp")
+content = read_resource("skill-mcp", "skill://data-analysis/SKILL.md")
+
+# Or use MCPClient
+with MCPClient("skill-mcp") as client:
+    resources = client.list_resources()
+    content = client.read_resource("skill://data-analysis/SKILL.md")
+    prompts = client.list_prompts()
+```
 
 ## Usage Examples
 
 ### Discovering Tool Schemas
 
-Before calling a tool, you can inspect its input schema to understand what arguments it expects:
+The progressive interface guides you through tool discovery:
 
 ```bash
-# Get detailed info about a specific tool
-mcpsh tool-info new_relic_mcp run_nrql_query
+# 1. See what tools are available
+mcpsh new-relic
+
+# 2. Get detailed info about a specific tool
+mcpsh new-relic run_nrql_query
 
 # This shows:
 # - Tool description
-# - Complete JSON schema
-# - Parameter details (required/optional)
+# - Parameter details (required/optional, types, descriptions)
+# - Nested parameter structures
 # - Example usage command
 
-# Now use the tool with correct arguments
-mcpsh call new_relic_mcp run_nrql_query --args '{
+# 3. Copy the example and modify it
+mcpsh new-relic run_nrql_query --args '{
   "query_input": {
     "nrql": "SELECT count(*) FROM Transaction SINCE 1 hour ago"
   }
@@ -439,19 +447,22 @@ mcpsh call new_relic_mcp run_nrql_query --args '{
 ### Database Operations
 
 ```bash
+# List database tools
+mcpsh postgres
+
 # List database tables
-mcpsh call postgres list_tables
+mcpsh postgres list_tables --args '{}'
 
 # Get table structure
-mcpsh call postgres describe_table --args '{"table": "users"}'
+mcpsh postgres describe_table --args '{"table": "users"}'
 
 # Run a query
-mcpsh call postgres query --args '{
+mcpsh postgres query --args '{
   "sql": "SELECT name, email FROM users WHERE active = true ORDER BY created_at DESC LIMIT 5"
 }'
 
 # Count records
-mcpsh call postgres query --args '{
+mcpsh postgres query --args '{
   "sql": "SELECT COUNT(*) as total FROM orders WHERE status = '\''completed'\''"
 }'
 ```
@@ -468,26 +479,26 @@ mcpsh call postgres query --args '{
 **Managing Skills:**
 
 ```bash
-# List available skills
-mcpsh tools skill-mcp
+# List available skill tools
+mcpsh skill-mcp
 
 # Read skill documentation
-mcpsh read skill-mcp "skill://data-analysis/SKILL.md"
+mcpsh skill-mcp --read-uri "skill://data-analysis/SKILL.md"
 
 # Get skill details
-mcpsh call skill-mcp get_skill_details --args '{"skill_name": "data-processor"}'
+mcpsh skill-mcp get_skill_details --args '{"skill_name": "data-processor"}'
 
 # Execute a skill script
-mcpsh call skill-mcp run_skill_script --args '{
+mcpsh skill-mcp run_skill_script --args '{
   "skill_name": "data-processor",
   "script_path": "scripts/process.py",
   "args": ["--input", "data/input.csv", "--output", "data/output.json"]
 }'
 ```
 
-**Using mcpsh Inside Skills:**
+**Using mcpsh Inside Skills (CLI approach):**
 
-Skills can use `mcpsh` to access any MCP server, giving them superpowers:
+Skills can use the `mcpsh` CLI to access any MCP server:
 
 ```python
 # Example: skill that queries database and sends alerts
@@ -499,14 +510,13 @@ import json
 def run_mcpsh(server, tool, args):
     """Helper to run mcpsh and parse JSON output"""
     result = subprocess.run([
-        "mcpsh", "call", server, tool,
+        "mcpsh", server, tool,
         "--args", json.dumps(args),
         "-f", "json"
     ], capture_output=True, text=True)
-    
-    # Skip success message, get JSON
-    output = result.stdout.strip().split('\n')[-1]
-    return json.loads(output)
+
+    # Pure JSON output - no need to skip lines!
+    return json.loads(result.stdout)
 
 # Query database
 users = run_mcpsh("postgres", "query", {
@@ -525,6 +535,33 @@ if users['count'] > 100:
     print(f"Alert: {users['count']} inactive users found")
 ```
 
+**Using mcpsh Python API Inside Skills (recommended):**
+
+Even better - use the Python API directly:
+
+```python
+# Example: skill that queries database and sends alerts
+# ~/.skill-mcp/skills/db-monitor/scripts/check_health.py
+
+from mcpsh import call_tool
+
+# Query database - much simpler!
+users = call_tool("postgres", "query", {
+    "sql": "SELECT COUNT(*) as count FROM users WHERE last_login < NOW() - INTERVAL '30 days'"
+}, parse_json=True)
+
+# Check metrics
+metrics = call_tool("new-relic", "run_nrql_query", {
+    "query_input": {
+        "nrql": "SELECT average(duration) FROM Transaction SINCE 1 hour ago"
+    }
+}, parse_json=True)
+
+# Send alert if needed
+if users['results'][0]['count'] > 100:
+    print(f"Alert: {users['results'][0]['count']} inactive users found")
+```
+
 This approach gives your skills access to:
 - Databases (PostgreSQL, MySQL, etc.)
 - Monitoring tools (New Relic, Datadog, etc.)
@@ -535,16 +572,16 @@ This approach gives your skills access to:
 
 ```bash
 # List API explorer capabilities
-mcpsh tools api-explorer
+mcpsh api-explorer
 
 # Make a GET request
-mcpsh call api-explorer make_request --args '{
+mcpsh api-explorer make_request --args '{
   "url": "https://jsonplaceholder.typicode.com/posts/1",
   "method": "GET"
 }'
 
 # Make a POST request
-mcpsh call api-explorer make_request --args '{
+mcpsh api-explorer make_request --args '{
   "url": "https://api.example.com/data",
   "method": "POST",
   "body": {"title": "New Item", "completed": false},
@@ -556,45 +593,46 @@ mcpsh call api-explorer make_request --args '{
 
 ```bash
 # List available monitoring tools
-mcpsh tools new_relic_mcp
+mcpsh new-relic
 
 # Query application metrics
-mcpsh call new_relic_mcp query_nrql --args '{
+mcpsh new-relic query_nrql --args '{
   "query": "SELECT average(duration) FROM Transaction WHERE appName = '\''MyApp'\'' SINCE 1 hour ago"
 }'
 
 # Get service health
-mcpsh call new_relic_mcp get_service_health --args '{
+mcpsh new-relic get_service_health --args '{
   "service_name": "api-gateway"
 }'
 ```
 
 ### Scripting and Automation
 
-The CLI has clean output by default, making it perfect for scripts and automation.
+**Using the CLI in Bash Scripts:**
 
 ```bash
-# Clean output - ready for scripting
-mcpsh call shippo-new-relic-mcp run_nrql_query \
-  --args '{"query_input":{"nrql":"SELECT count(*) FROM Transaction SINCE 1 hour ago"}}'
-
-# Parse JSON output with jq (skip success message)
-RESULT=$(mcpsh call shippo-new-relic-mcp run_nrql_query \
+# Pure JSON output - perfect for scripting (use -f json)
+mcpsh new-relic run_nrql_query \
   --args '{"query_input":{"nrql":"SELECT count(*) FROM Transaction SINCE 1 hour ago"}}' \
-  | tail -n +3)  # Skip success message and blank line
-  
+  -f json
+
+# Parse JSON output with jq - pure JSON, no need to skip lines!
+RESULT=$(mcpsh new-relic run_nrql_query \
+  --args '{"query_input":{"nrql":"SELECT count(*) FROM Transaction SINCE 1 hour ago"}}' \
+  -f json)
+
 echo "$RESULT" | jq -r '.results[0].count'
 
 # Use in a bash script
 #!/bin/bash
-TRANSACTION_COUNT=$(mcpsh call shippo-new-relic-mcp run_nrql_query \
+TRANSACTION_COUNT=$(mcpsh new-relic run_nrql_query \
   --args '{"query_input":{"nrql":"SELECT count(*) FROM Transaction SINCE 1 hour ago"}}' \
-  | tail -n +3 | jq -r '.results[0].count')
+  -f json | jq -r '.results[0].count')
 
 echo "Total transactions: $TRANSACTION_COUNT"
 
 # Error handling in scripts
-if OUTPUT=$(mcpsh call postgres query \
+if OUTPUT=$(mcpsh postgres query \
   --args '{"sql": "SELECT COUNT(*) FROM users"}'); then
   echo "Success: $OUTPUT"
 else
@@ -603,9 +641,36 @@ else
 fi
 ```
 
+**Using the Python API in Scripts (Recommended):**
+
+```python
+#!/usr/bin/env python3
+from mcpsh import call_tool, MCPClient
+
+# Simple one-off calls
+result = call_tool("postgres", "query", {"sql": "SELECT COUNT(*) FROM users"}, parse_json=True)
+print(f"Total users: {result}")
+
+# Multiple calls with context manager (reuses connection)
+with MCPClient("new-relic") as client:
+    # Check transaction count
+    transactions = client.call_tool("run_nrql_query", {
+        "query_input": {"nrql": "SELECT count(*) FROM Transaction SINCE 1 hour ago"}
+    }, parse_json=True)
+
+    # Check error rate
+    errors = client.call_tool("run_nrql_query", {
+        "query_input": {"nrql": "SELECT count(*) FROM TransactionError SINCE 1 hour ago"}
+    }, parse_json=True)
+
+    print(f"Transactions: {transactions['results'][0]['count']}")
+    print(f"Errors: {errors['results'][0]['count']}")
+```
+
 **Tips for Scripting:**
-- Output is clean by default (no server logs or fancy formatting)
-- Use `tail -n +3` to skip the success message if you only want the JSON
+- Use `-f json` for pure JSON output (no extra messages)
+- JSON output can be directly piped to `jq` or parsed with `json.loads()` - no preprocessing needed!
+- Markdown format (default) includes success messages and formatting for human readability
 - Pipe to `jq` for JSON parsing and extraction
 - Check exit codes for error handling
 - Use `--verbose` flag only when debugging issues
@@ -616,41 +681,41 @@ fi
 
 ```bash
 # Development configuration
-mcpsh servers --config ./config/dev.json
+mcpsh --config ./config/dev.json
 
-# Production configuration  
-mcpsh servers --config ./config/prod.json
+# Production configuration
+mcpsh --config ./config/prod.json
 
 # Testing with example server
-mcpsh tools example --config ./example_config.json
+mcpsh example --config ./example_config.json
 ```
 
 ### Piping and Automation
 
 ```bash
 # Save tool output to file
-mcpsh call postgres query --args '{"sql": "SELECT * FROM users"}' > users.txt
+mcpsh postgres query --args '{"sql": "SELECT * FROM users"}' > users.txt
 
 # Use in scripts
 #!/bin/bash
-TABLES=$(mcpsh call postgres list_tables --args '{}')
+TABLES=$(mcpsh postgres list_tables --args '{}')
 echo "Database has these tables: $TABLES"
 
-# Process with other tools
-mcpsh call postgres query --args '{"sql": "SELECT * FROM metrics"}' | jq '.[] | select(.value > 100)'
+# Process with other tools (use -f json for clean output)
+mcpsh postgres query --args '{"sql": "SELECT * FROM metrics"}' -f json | jq '.[] | select(.value > 100)'
 ```
 
 ### Working with Different Server Types
 
 ```bash
 # Local Python servers
-mcpsh tools example --config example_config.json
+mcpsh example --config example_config.json
 
 # Remote HTTP servers (configure with "url" and "transport": "http")
-mcpsh tools remote-api
+mcpsh remote-api
 
 # NPX/UVX servers (configure with "command": "uvx" or "npx")
-mcpsh tools mcp-package-server
+mcpsh mcp-package-server
 ```
 
 ## Example Server
@@ -663,12 +728,13 @@ The repository includes an example MCP server for testing:
 # In one terminal, start the example server:
 python example_server.py
 
-# In another terminal, use the CLI:
-mcpsh tools example --config example_config.json
-mcpsh call example greet --args '{"name": "World"}'
-mcpsh call example add --args '{"a": 5, "b": 3}'
-mcpsh resources example --config example_config.json
-mcpsh read example "data://example/apple" --config example_config.json
+# In another terminal, use the progressive CLI:
+mcpsh example --config example_config.json
+mcpsh example greet --args '{"name": "World"}'
+mcpsh example add --args '{"a": 5, "b": 3}'
+mcpsh example --resources --config example_config.json
+mcpsh example --read "data://example/apple" --config example_config.json
+mcpsh example --prompts --config example_config.json
 ```
 
 The example server provides:
@@ -684,7 +750,7 @@ Make sure the server name matches exactly what's in your configuration:
 
 ```bash
 # List servers to see exact names
-mcpsh servers
+mcpsh
 ```
 
 ### "Tool not found"
@@ -692,7 +758,7 @@ mcpsh servers
 List tools to see the exact name (some servers add prefixes):
 
 ```bash
-mcpsh tools <server-name>
+mcpsh <server-name>
 
 # Note: Multi-server configs may prefix tool names
 # Example: "servername_toolname"
@@ -704,43 +770,53 @@ Ensure your arguments are valid JSON with proper quoting:
 
 ```bash
 # ✓ Good - single quotes outside, double quotes inside
-mcpsh call server tool --args '{"key": "value"}'
+mcpsh server tool --args '{"key": "value"}'
 
 # ✗ Bad - missing quotes
-mcpsh call server tool --args '{key: value}'
+mcpsh server tool --args '{key: value}'
 ```
 
 ### Connection Issues
 
 ```bash
-# Test server connectivity
-mcpsh info <server-name>
+# Test server connectivity by listing tools
+mcpsh <server-name>
 
 # This will show if the server is responding and any errors
 ```
 
 ## Tips and Best Practices
 
-1. **Check tool names first**: Use `mcpsh tools <server>` to see exact names and descriptions
-2. **Use valid JSON for arguments**: Single quotes around the JSON, double quotes inside
-3. **Start simple**: Test with `servers` and `info` before calling tools
-4. **Read descriptions**: Tool and resource descriptions often include usage hints
-5. **Test with example server**: Use `example_config.json` to verify the CLI is working
-6. **Use custom configs**: Separate configs for different environments (dev, staging, prod)
+1. **Follow the progressive pattern**: Start with `mcpsh`, then add server, then tool, then args
+2. **Use `-h` for help at any level**: Get contextual help as you build your command
+3. **Check tool info before executing**: Run `mcpsh <server> <tool>` to see parameters and examples
+4. **Use valid JSON for arguments**: Single quotes around the JSON, double quotes inside
+5. **Use `-f json` for scripting**: Get pure JSON output perfect for pipes and parsing
+6. **Try the Python API**: Cleaner code, better error handling, connection reuse
+7. **Test with example server**: Use `example_config.json` to verify the CLI is working
+8. **Use custom configs**: Separate configs for different environments (dev, staging, prod)
 
-## Command Reference
+## Progressive Command Reference
 
-| Command | Description | Example |
-|---------|-------------|---------|
-| `servers` | List all configured servers | `mcpsh servers` |
-| `config-path` | Show which config file is being used | `mcpsh config-path` |
-| `info` | Show server details | `mcpsh info postgres` |
-| `tools` | List tools from a server | `mcpsh tools postgres` |
-| `tool-info` | Show detailed tool information | `mcpsh tool-info postgres query` |
-| `call` | Execute a tool | `mcpsh call postgres query --args '{"sql":"..."}` |
-| `resources` | List resources from a server | `mcpsh resources skill-mcp` |
-| `read` | Read a resource | `mcpsh read skill-mcp "skill://..."` |
-| `prompts` | List prompts from a server | `mcpsh prompts server-name` |
+The CLI uses a progressive interface where commands build on each other:
+
+| Arguments | Action | Example |
+|-----------|--------|---------|
+| None | List servers | `mcpsh` |
+| `<server>` | List tools | `mcpsh postgres` |
+| `<server> <tool>` | Show tool info | `mcpsh postgres query` |
+| `<server> <tool> --args` | Execute tool | `mcpsh postgres query --args '{"sql":"..."}'` |
+
+**Special Flags (available at any level):**
+
+| Flag | Description | Example |
+|------|-------------|---------|
+| `-f json` | JSON output | `mcpsh -f json` |
+| `-h` | Show help | `mcpsh postgres -h` |
+| `--resources` | List resources | `mcpsh skill-mcp --resources` |
+| `--prompts` | List prompts | `mcpsh postgres --prompts` |
+| `--read <uri>` | Read resource | `mcpsh skill-mcp --read "skill://..."` |
+| `--config <path>` | Custom config | `mcpsh --config ./config.json` |
 
 ## Common Patterns
 
@@ -748,53 +824,101 @@ mcpsh info <server-name>
 
 ```bash
 # 1. See what servers are available
-mcpsh servers
+mcpsh
 
 # 2. Check what a server offers
-mcpsh info postgres
+mcpsh postgres
 
 # 3. Look at specific capabilities
-mcpsh tools postgres
-mcpsh resources postgres
-mcpsh prompts postgres
+mcpsh postgres --resources
+mcpsh postgres --prompts
 
-# 4. Try it out
-mcpsh call postgres list_tables
+# 4. Get tool details
+mcpsh postgres query
+
+# 5. Try it out
+mcpsh postgres query --args '{"sql": "SELECT 1"}'
 ```
 
-### Integration Pattern
+### Integration Pattern (CLI)
 
 ```bash
 # Use MCP CLI in larger workflows
 #!/bin/bash
 
 # Get data from MCP server
-DATA=$(mcpsh call postgres query --args '{"sql": "SELECT * FROM metrics"}')
+DATA=$(mcpsh postgres query --args '{"sql": "SELECT * FROM metrics"}' -f json)
 
 # Process with other tools
 echo "$DATA" | jq '.[] | select(.value > 100)'
 
 # Store results
-mcpsh call postgres query --args '{"sql": "..."}' > output.json
+mcpsh postgres query --args '{"sql": "..."}' > output.json
+```
+
+### Integration Pattern (Python API)
+
+```python
+#!/usr/bin/env python3
+from mcpsh import MCPClient
+
+# Reuse connection for multiple operations
+with MCPClient("postgres") as client:
+    # Get data
+    metrics = client.call_tool("query",
+        {"sql": "SELECT * FROM metrics"},
+        parse_json=True)
+
+    # Process with Python
+    high_values = [m for m in metrics if m['value'] > 100]
+
+    # Store results
+    import json
+    with open('output.json', 'w') as f:
+        json.dump(high_values, f)
 ```
 
 ## Getting Help
 
+The progressive interface supports help at every level:
+
 ```bash
 # General help
 mcpsh --help
+mcpsh -h
 
-# Command-specific help
-mcpsh servers --help
-mcpsh call --help
-mcpsh tools --help
+# Server-level help
+mcpsh postgres --help
+mcpsh postgres -h
+
+# Tool-level help
+mcpsh postgres query --help
+mcpsh postgres query -h
+```
+
+## Python API Reference
+
+Import mcpsh for programmatic access:
+
+```python
+from mcpsh import (
+    MCPClient,      # Main client class
+    list_servers,   # List configured servers
+    list_tools,     # List tools from a server
+    call_tool,      # Execute a tool
+    list_resources, # List resources
+    read_resource,  # Read a resource
+)
+
+# All functions support both sync and async
+# Use MCPClient for connection reuse across multiple calls
 ```
 
 ## Requirements
 
 - Python 3.10+
 - FastMCP 2.12.5+
-- Typer 0.20.0+
+- Click 8.0.0+
 - Rich 14.2.0+
 
 ## Development
@@ -804,10 +928,14 @@ mcpsh tools --help
 ```
 mcpsh/
 ├── src/
-│   └── mcp_cli/
-│       ├── __init__.py
-│       ├── main.py        # CLI commands
+│   └── mcpsh/
+│       ├── __init__.py    # Package exports (Python API)
+│       ├── main.py        # Progressive CLI implementation
+│       ├── client.py      # Python API for importing
 │       └── config.py      # Configuration loader
+├── tests/
+│   ├── test_main.py       # CLI tests
+│   └── test_client.py     # Python API tests
 ├── example_server.py      # Example MCP server for testing
 ├── example_config.json    # Example configuration
 ├── pyproject.toml
@@ -820,12 +948,16 @@ mcpsh/
 # Install in editable mode
 uv pip install -e .
 
+# Run tests
+uv run pytest
+
 # Run the CLI
 mcpsh --help
+mcpsh
 
 # Test with example server
 python example_server.py  # In one terminal
-mcpsh tools example --config example_config.json  # In another
+mcpsh example --config example_config.json  # In another
 ```
 
 ## Related Projects

@@ -1,7 +1,7 @@
 [project]
 name = "mcpsh"
-version = "0.1.4"
-description = "A clean CLI for interacting with MCP servers using FastMCP"
+version = "1.0.0"
+description = "Progressive CLI and Python API for MCP servers - discover tools naturally and import directly in scripts"
 readme = "README.md"
 authors = [
     { name = "Foad Kesheh" }
