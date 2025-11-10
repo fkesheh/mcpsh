@@ -41,3 +41,4 @@ Thumbs.db
 mcp_config.json
 .env
 
+.claude/docs/fastmcp.md

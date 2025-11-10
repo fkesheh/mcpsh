@@ -16,6 +16,7 @@ from rich.markdown import Markdown
 from rich.traceback import install as install_rich_traceback
 
 from fastmcp import Client
+from fastmcp.client.transports import StdioTransport
 
 from mcpsh.config import load_config, list_configured_servers
 
@@ -60,6 +61,23 @@ def restore_logs(original_stderr_fd, devnull_fd):
             os.close(devnull_fd)
         except OSError:
             pass
+
+
+def create_client_with_cleanup(server_config: Dict) -> Client:
+    """Create a Client with keep_alive=False for proper subprocess cleanup."""
+    command = server_config.get("command")
+    args = server_config.get("args", [])
+    env = server_config.get("env")
+
+    # Create transport with keep_alive=False to ensure subprocess terminates after use
+    transport = StdioTransport(
+        command=command,
+        args=args,
+        env=env,
+        keep_alive=False
+    )
+
+    return Client(transport)
 
 
 def json_to_markdown(data: Union[Dict, List, str, int, float, bool, None], level: int = 0) -> str:
@@ -256,9 +274,10 @@ def _list_tools(server: str, config: Optional[Path], format_type: str):
                 sys.exit(1)
 
             server_config = servers_config[server]
-            mcp_config = {"mcpServers": {server: server_config}}
 
-            async with Client(mcp_config) as client:
+            # Create client with keep_alive=False for proper subprocess cleanup
+            client = create_client_with_cleanup(server_config)
+            async with client:
                 tools_list = await client.list_tools()
 
                 if not tools_list:
@@ -314,9 +333,10 @@ def _show_tool_info(server: str, tool_name: str, config: Optional[Path], format_
                 sys.exit(1)
 
             server_config = servers_config[server]
-            mcp_config = {"mcpServers": {server: server_config}}
 
-            async with Client(mcp_config) as client:
+            # Create client with keep_alive=False for proper subprocess cleanup
+            client = create_client_with_cleanup(server_config)
+            async with client:
                 tools_list = await client.list_tools()
 
                 # Find the requested tool
@@ -469,10 +489,9 @@ def _execute_tool(server: str, tool_name: str, args_json: str, config: Optional[
                     console.print(f"[red]{error_msg}[/red]")
                 sys.exit(1)
 
-            # Create MCPConfig format for Client
-            mcp_config = {"mcpServers": {server: server_config}}
-
-            async with Client(mcp_config) as client:
+            # Create client with keep_alive=False for proper subprocess cleanup
+            client = create_client_with_cleanup(server_config)
+            async with client:
                 # Construct tool name with server prefix if needed
                 full_tool_name = f"{server}_{tool_name}" if "_" not in tool_name else tool_name
 
@@ -530,9 +549,10 @@ def _list_resources(server: str, config: Optional[Path], format_type: str):
                 sys.exit(1)
 
             server_config = servers_config[server]
-            mcp_config = {"mcpServers": {server: server_config}}
 
-            async with Client(mcp_config) as client:
+            # Create client with keep_alive=False for proper subprocess cleanup
+            client = create_client_with_cleanup(server_config)
+            async with client:
                 resources_list = await client.list_resources()
 
                 if not resources_list:
@@ -574,9 +594,10 @@ def _list_prompts(server: str, config: Optional[Path], format_type: str):
                 sys.exit(1)
 
             server_config = servers_config[server]
-            mcp_config = {"mcpServers": {server: server_config}}
 
-            async with Client(mcp_config) as client:
+            # Create client with keep_alive=False for proper subprocess cleanup
+            client = create_client_with_cleanup(server_config)
+            async with client:
                 prompts_list = await client.list_prompts()
 
                 if not prompts_list:
@@ -618,9 +639,10 @@ def _read_resource(server: str, uri: str, config: Optional[Path], format_type: s
                 sys.exit(1)
 
             server_config = servers_config[server]
-            mcp_config = {"mcpServers": {server: server_config}}
 
-            async with Client(mcp_config) as client:
+            # Create client with keep_alive=False for proper subprocess cleanup
+            client = create_client_with_cleanup(server_config)
+            async with client:
                 content_list = await client.read_resource(uri)
 
                 console.print("[bold green]✓ Resource read successfully[/bold green]\n")
